@@ -15,6 +15,8 @@ export interface AppConfig {
   corsOrigin: string;
   tempDir: string;
   maxConcurrentDownloads: number;
+  cleanupIntervalMinutes: number;
+  runProviderIntegrationTests: boolean;
 
   rateLimit: {
     maxRequests: number;
@@ -39,6 +41,7 @@ export interface AppConfig {
       maxFileSize: string; // e.g. "100M"
       maxFileSizeBytes: number;
       jsRuntime: string;
+      remoteComponents: string;
       ejsSource: string;
     };
     cobalt: {
@@ -82,7 +85,11 @@ const parseSizeToBytes = (sizeStr: string): number => {
   }
 };
 
-const maxFileSize = process.env.YTDLP_MAX_FILE_SIZE || '100M';
+const maxFileSize = process.env.MAX_FILE_SIZE_MB
+  ? `${process.env.MAX_FILE_SIZE_MB}M`
+  : (process.env.YTDLP_MAX_FILE_SIZE || '100M');
+
+const remoteComponents = (process.env.YTDLP_REMOTE_COMPONENTS || process.env.YTDLP_EJS_SOURCE || 'ejs:github').trim();
 
 export const config: AppConfig = {
   env: process.env.NODE_ENV || 'development',
@@ -97,18 +104,21 @@ export const config: AppConfig = {
   corsOrigin: process.env.CORS_ORIGIN || '*',
   tempDir: process.env.TEMP_DIR || path.join(process.cwd(), 'temp'),
   maxConcurrentDownloads: parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || '3', 10),
+  cleanupIntervalMinutes: parseInt(process.env.CLEANUP_INTERVAL_MINUTES || '15', 10),
+  runProviderIntegrationTests: process.env.RUN_PROVIDER_INTEGRATION_TESTS === 'true',
 
   rateLimit: {
-    maxRequests: parseInt(process.env.RATE_LIMIT_MAX || process.env.RATE_LIMIT_MAX_REQUESTS || '10', 10),
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW || process.env.RATE_LIMIT_WINDOW_MS || '3600000', 10), // 1 hour
+    // Default: 10 requests per window (1 hour)
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || process.env.RATE_LIMIT_MAX || '10', 10),
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || process.env.RATE_LIMIT_WINDOW || '3600000', 10), // 1 hour
     adminMaxRequests: parseInt(process.env.ADMIN_RATE_LIMIT_MAX_REQUESTS || '1000', 10),
     adminWindowMs: parseInt(process.env.ADMIN_RATE_LIMIT_WINDOW_MS || '3600000', 10),
   },
 
   cache: {
     enabled: process.env.CACHE_ENABLED !== 'false',
-    ttlSeconds: parseInt(process.env.CACHE_TTL || process.env.CACHE_TTL_SECONDS || '1800', 10), // 30 minutes
-    jobExpirationSeconds: parseInt(process.env.JOB_TTL || process.env.JOB_EXPIRATION_SECONDS || '3600', 10), // 1 hour
+    ttlSeconds: parseInt(process.env.CACHE_TTL_SECONDS || process.env.CACHE_TTL || '1800', 10), // 30 minutes
+    jobExpirationSeconds: parseInt(process.env.JOB_EXPIRATION_SECONDS || process.env.JOB_TTL || '3600', 10), // 1 hour
   },
 
   providers: {
@@ -117,11 +127,12 @@ export const config: AppConfig = {
     ytdlp: {
       enabled: process.env.YTDLP_ENABLED !== 'false',
       binaryPath: process.env.YTDLP_PATH || 'yt-dlp',
-      timeoutMs: parseInt(process.env.YTDLP_TIMEOUT || process.env.YTDLP_TIMEOUT_MS || '45000', 10),
+      timeoutMs: parseInt(process.env.YTDLP_TIMEOUT_MS || process.env.YTDLP_TIMEOUT || '45000', 10),
       maxFileSize,
       maxFileSizeBytes: parseSizeToBytes(maxFileSize),
       jsRuntime: (process.env.YTDLP_JS_RUNTIME || 'auto').toLowerCase().trim(),
-      ejsSource: (process.env.YTDLP_EJS_SOURCE || 'github').toLowerCase().trim(),
+      remoteComponents,
+      ejsSource: remoteComponents,
     },
     cobalt: {
       enabled: process.env.COBALT_ENABLED !== 'false',

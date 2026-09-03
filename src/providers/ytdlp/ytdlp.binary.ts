@@ -10,10 +10,16 @@ const execFileAsync = promisify(execFile);
 
 export interface JsRuntimeInfo {
   available: boolean;
-  name: string;
+  name: 'deno' | 'node' | 'none';
   version?: string;
   path?: string;
+  isSupported: boolean;
   warning?: string;
+}
+
+export interface FfmpegInfo {
+  available: boolean;
+  version?: string;
 }
 
 export class YtDlpBinaryManager {
@@ -21,8 +27,10 @@ export class YtDlpBinaryManager {
   private static lastCheckTime = 0;
   private static isAvailable = false;
   private static version = 'unknown';
+
   private static ffmpegChecked = false;
-  private static ffmpegAvailable = false;
+  private static ffmpegInfo: FfmpegInfo = { available: false };
+
   private static jsRuntimeInfo: JsRuntimeInfo | null = null;
   private static lastJsCheckTime = 0;
 
@@ -91,7 +99,7 @@ export class YtDlpBinaryManager {
 
   /**
    * Resolves supported JavaScript runtime for YouTube challenge solving.
-   * Prefers Deno 2.x, or Node.js 22+. Rejects Node <= 20.
+   * Prefers Deno 2.x, or Node.js 22+. Explicitly rejects Node <= 20.
    */
   static async resolveJsRuntime(): Promise<JsRuntimeInfo> {
     const now = Date.now();
@@ -102,23 +110,33 @@ export class YtDlpBinaryManager {
     const preferred = config.providers.ytdlp.jsRuntime;
 
     if (preferred === 'none') {
-      this.jsRuntimeInfo = { available: false, name: 'none', warning: 'JS runtime explicitly disabled' };
+      this.jsRuntimeInfo = {
+        available: false,
+        name: 'none',
+        isSupported: false,
+        warning: 'JS runtime explicitly disabled in configuration',
+      };
       this.lastJsCheckTime = now;
       return this.jsRuntimeInfo;
     }
 
-    // Check Deno if preferred or 'auto'
+    // Check Deno if preferred or 'auto' (Recommended by yt-dlp docs)
     if (preferred === 'deno' || preferred === 'auto') {
       try {
         const { stdout } = await execFileAsync('deno', ['--version'], { timeout: 4000 });
         const firstLine = stdout.trim().split('\n')[0] || '';
         const verMatch = firstLine.match(/deno\s+([0-9.]+)/i);
         const version = verMatch ? verMatch[1] : firstLine;
-        this.jsRuntimeInfo = { available: true, name: 'deno', version };
+        this.jsRuntimeInfo = {
+          available: true,
+          name: 'deno',
+          version,
+          isSupported: true,
+        };
         this.lastJsCheckTime = now;
         return this.jsRuntimeInfo;
       } catch {
-        // Deno not available
+        // Deno not available, fall through
       }
     }
 
@@ -131,26 +149,34 @@ export class YtDlpBinaryManager {
         const major = majorMatch ? parseInt(majorMatch[1], 10) : 0;
 
         if (major >= 22) {
-          this.jsRuntimeInfo = { available: true, name: 'node', version };
+          this.jsRuntimeInfo = {
+            available: true,
+            name: 'node',
+            version,
+            isSupported: true,
+          };
         } else if (major > 0) {
+          // Node 20 or lower is NOT supported for yt-dlp EJS runtime
           this.jsRuntimeInfo = {
             available: false,
             name: 'node',
             version,
-            warning: `Node.js ${version} is below version 22. Deno 2.x or Node 22+ required for yt-dlp EJS runtime.`,
+            isSupported: false,
+            warning: `Node.js ${version} is below version 22. Deno 2.x or Node 22+ is required for yt-dlp YouTube challenge solving.`,
           };
         }
         this.lastJsCheckTime = now;
         if (this.jsRuntimeInfo) return this.jsRuntimeInfo;
       } catch {
-        // Node not available
+        // Node not available on PATH
       }
     }
 
     this.jsRuntimeInfo = {
       available: false,
-      name: preferred,
-      warning: 'No compatible JavaScript runtime (Deno or Node 22+) detected on PATH',
+      name: 'none',
+      isSupported: false,
+      warning: 'No supported JavaScript runtime (Deno 2.x or Node 22+) detected on host system.',
     };
     this.lastJsCheckTime = now;
     return this.jsRuntimeInfo;
@@ -161,7 +187,7 @@ export class YtDlpBinaryManager {
    */
   static async getJsRuntimeArgs(): Promise<string[]> {
     const runtime = await this.resolveJsRuntime();
-    if (runtime.available && (runtime.name === 'deno' || runtime.name === 'node')) {
+    if (runtime.available && runtime.isSupported && (runtime.name === 'deno' || runtime.name === 'node')) {
       return ['--js-runtimes', runtime.name];
     }
     return [];
@@ -171,29 +197,42 @@ export class YtDlpBinaryManager {
    * Returns command arguments for remote EJS components if configured.
    */
   static getEjsArgs(): string[] {
-    const source = config.providers.ytdlp.ejsSource;
-    if (source === 'github') {
+    const raw = config.providers.ytdlp.remoteComponents || config.providers.ytdlp.ejsSource;
+    if (!raw || raw === 'none' || raw === 'false') {
+      return [];
+    }
+
+    if (raw.startsWith('ejs:')) {
+      return ['--remote-components', raw];
+    }
+
+    if (raw === 'github') {
       return ['--remote-components', 'ejs:github'];
     }
-    if (source === 'npm') {
+
+    if (raw === 'npm') {
       return ['--remote-components', 'ejs:npm'];
     }
-    return [];
+
+    return ['--remote-components', raw];
   }
 
   /**
    * Checks if FFmpeg is installed and accessible on host.
    */
-  static async checkFfmpeg(): Promise<boolean> {
-    if (this.ffmpegChecked) return this.ffmpegAvailable;
+  static async checkFfmpeg(): Promise<FfmpegInfo> {
+    if (this.ffmpegChecked) return this.ffmpegInfo;
     try {
-      await execFileAsync('ffmpeg', ['-version'], { timeout: 3000 });
-      this.ffmpegAvailable = true;
+      const { stdout } = await execFileAsync('ffmpeg', ['-version'], { timeout: 3000 });
+      const firstLine = stdout.trim().split('\n')[0] || '';
+      const verMatch = firstLine.match(/ffmpeg\s+version\s+([^\s]+)/i);
+      const version = verMatch ? verMatch[1] : firstLine;
+      this.ffmpegInfo = { available: true, version };
     } catch {
-      this.ffmpegAvailable = false;
+      this.ffmpegInfo = { available: false };
     }
     this.ffmpegChecked = true;
-    return this.ffmpegAvailable;
+    return this.ffmpegInfo;
   }
 
   /**

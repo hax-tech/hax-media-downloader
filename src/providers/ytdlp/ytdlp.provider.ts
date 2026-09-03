@@ -1,32 +1,38 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import { BaseProvider } from '../base/base.provider.ts';
 import {
-  Platform,
   DownloadOptions,
   MediaInfo,
-  MediaFormatInfo,
   NormalizedDownloadResult,
+  Platform,
   ProviderHealth,
-  SearchResultItem,
+  MediaFormatInfo,
 } from '../../types/index.ts';
-import { config } from '../../config/index.ts';
-import { YtDlpBinaryManager } from './ytdlp.binary.ts';
 import { detectPlatform } from '../../utils/platform-detector.ts';
-import { storageService } from '../../services/storage/storage.service.ts';
 import { DownloaderError } from '../../utils/errors.ts';
+import { config } from '../../config/index.ts';
 import { logger } from '../../utils/logger.ts';
+import { YtDlpBinaryManager, FfmpegInfo } from './ytdlp.binary.ts';
+import { storageService } from '../../services/storage/storage.service.ts';
 
 /**
- * Builds format selection string according to media type, quality, container preference, and FFmpeg presence.
+ * Builds safe yt-dlp format selector arguments.
+ * Properly handles audio extraction and video remuxing with FFmpeg.
  */
-export function buildYtDlpFormatSelector(options?: DownloadOptions, hasFfmpeg = true): { selector: string; extraArgs: string[] } {
+export function buildYtDlpFormatSelector(
+  options?: DownloadOptions,
+  ffmpegInfo?: boolean | FfmpegInfo
+): { selector: string; extraArgs: string[] } {
   const isAudio = options?.type === 'audio';
+  const requestedFormat = options?.format?.toLowerCase();
   const requestedQuality = (options?.quality || '720p').toLowerCase();
-  const requestedFormat = (options?.format || (isAudio ? 'mp3' : 'mp4')).toLowerCase();
+  const hasFfmpeg = typeof ffmpegInfo === 'boolean' ? ffmpegInfo : Boolean(ffmpegInfo?.available);
+
   const extraArgs: string[] = [];
 
+  // Audio format selector
   if (isAudio) {
     if (requestedFormat === 'm4a') {
       return {
@@ -34,17 +40,14 @@ export function buildYtDlpFormatSelector(options?: DownloadOptions, hasFfmpeg = 
         extraArgs: hasFfmpeg ? ['-x', '--audio-format', 'm4a'] : [],
       };
     }
-    // Default MP3
-    if (!hasFfmpeg && requestedFormat === 'mp3') {
-      // Without FFmpeg, we cannot convert streams to MP3; fallback to best native audio
-      return {
-        selector: 'bestaudio/best',
-        extraArgs: [],
-      };
-    }
+
+    const audioFmt = requestedFormat === 'wav' || requestedFormat === 'ogg' || requestedFormat === 'aac'
+      ? requestedFormat
+      : 'mp3';
+
     return {
       selector: 'bestaudio/best',
-      extraArgs: ['-x', '--audio-format', requestedFormat || 'mp3'],
+      extraArgs: hasFfmpeg ? ['-x', '--audio-format', audioFmt] : [],
     };
   }
 
@@ -68,7 +71,7 @@ export function buildYtDlpFormatSelector(options?: DownloadOptions, hasFfmpeg = 
     }
     extraArgs.push('--merge-output-format', 'mp4');
   } else {
-    // Single stream fallback when FFmpeg is not present
+    // Single-stream fallback when FFmpeg is not installed
     if (heightLimit) {
       selector = `best[height<=${heightLimit}][ext=mp4]/best[height<=${heightLimit}]/best`;
     } else {
@@ -94,7 +97,9 @@ export function parseYtDlpJson(stdout: string): Record<string, unknown> {
   try {
     return JSON.parse(jsonSnippet);
   } catch (err) {
-    throw DownloaderError.ytdlpFailed(`Failed to parse yt-dlp output JSON: ${(err as Error).message}`, { raw: jsonSnippet.slice(0, 300) });
+    throw DownloaderError.ytdlpFailed(`Failed to parse yt-dlp output JSON: ${(err as Error).message}`, {
+      raw: jsonSnippet.slice(0, 300),
+    });
   }
 }
 
@@ -116,47 +121,52 @@ export class YtDlpProvider extends BaseProvider {
       const binary = await YtDlpBinaryManager.resolveBinary();
       const latencyMs = Date.now() - start;
 
-      if (!binary.available) {
+      if (!binary.available || !binary.path) {
         return {
           provider: this.name,
           available: false,
           latencyMs,
-          statusMessage: 'YTDLP_NOT_FOUND: yt-dlp executable was not found on the host system or configured path',
+          statusMessage: 'YTDLP_NOT_FOUND: yt-dlp executable was not found on host system or configured path',
         };
       }
 
-      const hasFfmpeg = await YtDlpBinaryManager.checkFfmpeg();
+      const ffmpeg = await YtDlpBinaryManager.checkFfmpeg();
       const jsRuntime = await YtDlpBinaryManager.resolveJsRuntime();
 
-      const details: string[] = [`version ${binary.version}`];
-      if (hasFfmpeg) {
-        details.push('ffmpeg active');
+      let available = true;
+      const statusParts = [`yt-dlp v${binary.version}`];
+
+      if (ffmpeg.available) {
+        statusParts.push(`FFmpeg active (${ffmpeg.version || 'detected'})`);
       } else {
-        details.push('ffmpeg missing');
+        statusParts.push('FFmpeg missing');
       }
 
-      if (jsRuntime.available) {
-        details.push(`js-runtime: ${jsRuntime.name} ${jsRuntime.version || ''}`.trim());
-      } else if (jsRuntime.warning) {
-        details.push(`js-runtime warning: ${jsRuntime.warning}`);
+      if (jsRuntime.available && jsRuntime.isSupported) {
+        statusParts.push(`JS runtime: ${jsRuntime.name} v${jsRuntime.version || 'detected'}`);
+      } else {
+        available = false;
+        statusParts.push(jsRuntime.warning || 'JS runtime missing or unsupported (requires Deno 2.x or Node 22+)');
       }
 
-      if (config.providers.ytdlp.ejsSource && config.providers.ytdlp.ejsSource !== 'none') {
-        details.push(`ejs: ${config.providers.ytdlp.ejsSource}`);
+      const ejsConfig = config.providers.ytdlp.remoteComponents;
+      if (ejsConfig && ejsConfig !== 'none') {
+        statusParts.push(`EJS: ${ejsConfig}`);
       }
 
       return {
         provider: this.name,
-        available: true,
+        available,
         latencyMs,
         version: binary.version,
-        statusMessage: `yt-dlp is available (${details.join(', ')})`,
+        statusMessage: statusParts.join(' | '),
       };
-    } catch (err: unknown) {
+    } catch (err) {
       return {
         provider: this.name,
         available: false,
-        statusMessage: (err as Error).message,
+        latencyMs: Date.now() - start,
+        statusMessage: `yt-dlp health check failed: ${(err as Error).message}`,
       };
     }
   }
@@ -164,7 +174,7 @@ export class YtDlpProvider extends BaseProvider {
   async getInfo(url: string, options?: DownloadOptions): Promise<MediaInfo> {
     const platform = detectPlatform(url);
     if (!platform) {
-      throw DownloaderError.unsupportedPlatform(`Unsupported URL: ${url}`);
+      throw DownloaderError.unsupportedPlatform(`Unsupported URL for metadata extraction: ${url}`);
     }
 
     const binary = await YtDlpBinaryManager.resolveBinary();
@@ -176,6 +186,7 @@ export class YtDlpProvider extends BaseProvider {
     const jsRuntimeArgs = await YtDlpBinaryManager.getJsRuntimeArgs();
     const ejsArgs = YtDlpBinaryManager.getEjsArgs();
 
+    // Strict argument array (no shell interpolation, no deprecated --no-call-home)
     const args = [
       '--dump-single-json',
       '--no-warnings',
@@ -200,7 +211,11 @@ export class YtDlpProvider extends BaseProvider {
         const height = typeof fmt.height === 'number' ? fmt.height : undefined;
         const resolution = fmt.resolution ? String(fmt.resolution) : height ? `${height}p` : undefined;
         const note = fmt.format_note ? String(fmt.format_note) : undefined;
-        const filesize = typeof fmt.filesize === 'number' ? fmt.filesize : typeof fmt.filesize_approx === 'number' ? fmt.filesize_approx : undefined;
+        const filesize = typeof fmt.filesize === 'number'
+          ? fmt.filesize
+          : typeof fmt.filesize_approx === 'number'
+          ? fmt.filesize_approx
+          : undefined;
 
         if (resolution && !availableQualities.includes(resolution)) {
           availableQualities.push(resolution);
@@ -265,12 +280,13 @@ export class YtDlpProvider extends BaseProvider {
     const timeout = options?.timeoutMs || config.providers.ytdlp.timeoutMs;
     const jobId = (options?.jobId as string) || `job_${crypto.randomBytes(6).toString('hex')}`;
 
-    // Use isolated per-job directory
+    // Use isolated unique per-job directory
     const jobDir = storageService.createJobDirectory(jobId);
-    const outputTemplate = path.join(jobDir, '%(title).100B_%(id)s.%(ext)s');
+    // Safe internal filename inside isolated per-job directory (never trust remote filename)
+    const outputTemplate = path.join(jobDir, 'media.%(ext)s');
 
-    const hasFfmpeg = await YtDlpBinaryManager.checkFfmpeg();
-    const { selector, extraArgs } = buildYtDlpFormatSelector(options, hasFfmpeg);
+    const ffmpegInfo = await YtDlpBinaryManager.checkFfmpeg();
+    const { selector, extraArgs } = buildYtDlpFormatSelector(options, ffmpegInfo);
     const jsRuntimeArgs = await YtDlpBinaryManager.getJsRuntimeArgs();
     const ejsArgs = YtDlpBinaryManager.getEjsArgs();
 
@@ -286,25 +302,44 @@ export class YtDlpProvider extends BaseProvider {
       '-o',
       outputTemplate,
       '--print',
+      'title',
+      '--print',
       'after_move:filepath',
       ...extraArgs,
       '--',
       url,
     ];
 
-    logger.info(`Executing yt-dlp download for job ${jobId}`, { platform, requestedFormat, requestedQuality });
+    logger.info(`Executing yt-dlp download for job ${jobId}`, {
+      platform,
+      requestedFormat,
+      requestedQuality,
+      jobDir,
+    });
+
     try {
       const { stdout } = await YtDlpBinaryManager.executeCommand(args, timeout);
 
-      // Find the printed final filepath or scan job directory for matching output
+      // Parse printed output:
+      // Line 1: Title
+      // Line 2: Final Filepath
       const outputLines = stdout.trim().split('\n').map((l) => l.trim()).filter(Boolean);
-      let downloadedFilePath = outputLines[outputLines.length - 1] || '';
+      let parsedTitle = 'Media';
+      let downloadedFilePath = '';
 
+      if (outputLines.length >= 2) {
+        parsedTitle = outputLines[outputLines.length - 2];
+        downloadedFilePath = outputLines[outputLines.length - 1];
+      } else if (outputLines.length === 1) {
+        downloadedFilePath = outputLines[0];
+      }
+
+      // If downloadedFilePath is not on disk, scan isolated jobDir
       if (!downloadedFilePath || !fs.existsSync(downloadedFilePath)) {
-        // Fallback: search job directory for any created file
         const files = await fs.promises.readdir(jobDir);
-        if (files.length > 0) {
-          downloadedFilePath = path.join(jobDir, files[0]);
+        const mediaFile = files.find((f) => !f.endsWith('.part') && !f.endsWith('.ytdl'));
+        if (mediaFile) {
+          downloadedFilePath = path.join(jobDir, mediaFile);
         }
       }
 
@@ -313,18 +348,30 @@ export class YtDlpProvider extends BaseProvider {
         throw DownloaderError.ytdlpFailed('yt-dlp finished but output media file was not found in storage');
       }
 
-      // Validate the resulting file
+      // Validate the resulting file (size, non-empty, allowed extension, magic bytes)
       const validation = await storageService.validateDownloadedFile(downloadedFilePath, requestedFormat);
       if (!validation.isValid) {
         await storageService.cleanupJob(jobId);
         throw DownloaderError.invalidMedia(validation.error || 'Downloaded media failed validation');
       }
 
-      const fileToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
-      const cleanTitle = path.basename(downloadedFilePath).replace(/\.[^.]+$/, '');
-      const userFilename = storageService.sanitizeFilename(cleanTitle, validation.extension);
+      // Clean up any other auxiliary / intermediate files in the job directory on success
+      try {
+        const remainingFiles = await fs.promises.readdir(jobDir);
+        for (const file of remainingFiles) {
+          const fullPath = path.join(jobDir, file);
+          if (fullPath !== downloadedFilePath) {
+            await fs.promises.rm(fullPath, { force: true }).catch(() => {});
+          }
+        }
+      } catch {
+        // Non-fatal cleanup
+      }
 
-      // Register token in storage service
+      const fileToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
+      const userFilename = storageService.sanitizeFilename(parsedTitle, validation.extension);
+
+      // Register safe file token
       storageService.registerFileToken(
         fileToken,
         jobId,
@@ -341,7 +388,7 @@ export class YtDlpProvider extends BaseProvider {
         success: true,
         platform,
         provider: this.name,
-        title: cleanTitle,
+        title: parsedTitle,
         duration: 0,
         format: validation.extension,
         quality: requestedQuality,
@@ -355,59 +402,69 @@ export class YtDlpProvider extends BaseProvider {
         jobId,
       };
     } catch (err) {
+      // Clean up isolated job directory on failure
       await storageService.cleanupJob(jobId).catch(() => {});
       throw err;
     }
   }
 
-  override async search(query: string, platform?: Platform): Promise<SearchResultItem[]> {
-    if (platform && platform !== 'youtube') {
+  async search(query: string, platform: Platform): Promise<MediaInfo[]> {
+    if (platform !== 'youtube') {
       return [];
     }
 
     const binary = await YtDlpBinaryManager.resolveBinary();
     if (!binary.available) {
-      return [];
+      throw DownloaderError.ytdlpNotFound();
     }
 
+    const cleanQuery = query.replace(/[^\w\s-]/g, '').trim();
+    if (!cleanQuery) return [];
+
+    const jsRuntimeArgs = await YtDlpBinaryManager.getJsRuntimeArgs();
+    const ejsArgs = YtDlpBinaryManager.getEjsArgs();
+
+    const args = [
+      `ytsearch5:${cleanQuery}`,
+      '--dump-single-json',
+      '--flat-playlist',
+      '--no-warnings',
+      '--skip-download',
+      ...jsRuntimeArgs,
+      ...ejsArgs,
+    ];
+
     try {
-      const cleanQuery = query.trim().slice(0, 100);
-      const args = [
-        '--dump-single-json',
-        '--flat-playlist',
-        '--no-warnings',
-        '--skip-download',
-        '--',
-        `ytsearch5:${cleanQuery}`,
-      ];
       const { stdout } = await YtDlpBinaryManager.executeCommand(args, 15000);
       const data = parseYtDlpJson(stdout);
-      if (!data.entries || !Array.isArray(data.entries)) return [];
+      const results: MediaInfo[] = [];
 
-      return data.entries.map((entry: Record<string, unknown>) => {
-        const id = String(entry.id || '');
-        const title = String(entry.title || 'Untitled');
-        const url = entry.url ? String(entry.url) : `https://www.youtube.com/watch?v=${id}`;
-        const uploader = String(entry.uploader || entry.channel || '');
-        const duration = typeof entry.duration === 'number' ? Math.round(entry.duration) : undefined;
-        let thumbnail: string | undefined;
-        if (Array.isArray(entry.thumbnails) && entry.thumbnails[0]?.url) {
-          thumbnail = String(entry.thumbnails[0].url);
+      if (Array.isArray(data.entries)) {
+        for (const entry of data.entries) {
+          if (!entry || !entry.id) continue;
+          const videoId = String(entry.id);
+          const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+          const title = String(entry.title || 'Untitled');
+          const duration = typeof entry.duration === 'number' ? Math.round(entry.duration) : 0;
+          const uploader = String(entry.uploader || entry.channel || 'Unknown');
+
+          results.push({
+            id: videoId,
+            title,
+            uploader,
+            author: uploader,
+            duration,
+            platform: 'youtube',
+            webpageUrl: videoUrl,
+            url: videoUrl,
+            originalUrl: videoUrl,
+          });
         }
+      }
 
-        return {
-          id,
-          title,
-          url,
-          webpageUrl: url,
-          thumbnail,
-          duration,
-          platform: 'youtube' as Platform,
-          uploader,
-          author: uploader,
-        };
-      });
-    } catch {
+      return results;
+    } catch (err) {
+      logger.warn('yt-dlp search operation failed', { error: (err as Error).message });
       return [];
     }
   }

@@ -6,6 +6,8 @@ import { runRateLimitingTests } from './rate-limiting.test.ts';
 import { runExpirationAndCleanupTests } from './expiration-and-cleanup.test.ts';
 import { runApiValidationTests } from './api-validation.test.ts';
 import { runYtDlpProviderTests } from './ytdlp-provider.test.ts';
+import { runSecurityAuthTests } from './security-auth.test.ts';
+import { runProviderIntegrationTests } from './provider-integration.test.ts';
 
 async function runAllTests() {
   console.log('====================================================');
@@ -26,6 +28,8 @@ async function runAllTests() {
     { name: 'Rate Limiting', fn: runRateLimitingTests },
     { name: 'Expiration & Cache Cleanup', fn: runExpirationAndCleanupTests },
     { name: 'API Schema Validation', fn: runApiValidationTests },
+    { name: 'Security, Constant-Time Auth & Bounded Memory', fn: runSecurityAuthTests },
+    { name: 'Provider Integration (Environment-Controlled)', fn: runProviderIntegrationTests },
   ];
 
   for (const suite of suites) {

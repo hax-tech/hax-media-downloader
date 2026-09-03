@@ -7,9 +7,12 @@ export const validateBody = (schema: ZodSchema) => {
     if (!result.success) {
       const issue = result.error.issues[0];
       const field = issue.path.join('.') || 'body';
+      const isUrlError = field === 'url' || issue.message.toLowerCase().includes('url');
+      const errorCode = isUrlError ? 'INVALID_URL' : 'VALIDATION_ERROR';
       res.status(400).json({
         success: false,
         error: `Validation Error: ${issue.message} at '${field}'`,
+        code: errorCode,
         details: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
       return;
