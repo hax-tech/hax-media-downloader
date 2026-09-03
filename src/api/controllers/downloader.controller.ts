@@ -76,6 +76,7 @@ export class DownloaderController {
           { type, quality, format },
           userId
         );
+        const { filePath: _fp, ...safeResult } = result;
         res.json({
           success: true,
           data: {
@@ -87,7 +88,7 @@ export class DownloaderController {
             downloadUrl: result.downloadUrl || result.url,
             progress: null,
           },
-          ...result,
+          ...safeResult,
         });
         return;
       }
@@ -122,6 +123,8 @@ export class DownloaderController {
         throw DownloaderError.jobNotFound(id);
       }
 
+      const { filePath: _fp, ...safeJob } = job;
+
       // Format response strictly adhering to WhatsApp bot Tanu-xai expectations
       res.json({
         success: true,
@@ -132,7 +135,7 @@ export class DownloaderController {
           mimeType: job.mimeType,
           size: job.size,
           downloadUrl: job.downloadUrl || job.mediaUrl,
-          progress: job.progress ?? null,
+          progress: null,
           format: job.format,
           quality: job.quality,
           thumbnail: job.thumbnail,
@@ -142,7 +145,7 @@ export class DownloaderController {
           error: job.error,
           errorCode: job.errorCode,
         },
-        job,
+        job: safeJob,
       });
     } catch (err) {
       next(err);

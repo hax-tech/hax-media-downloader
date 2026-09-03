@@ -38,6 +38,8 @@ export interface AppConfig {
       timeoutMs: number;
       maxFileSize: string; // e.g. "100M"
       maxFileSizeBytes: number;
+      jsRuntime: string;
+      ejsSource: string;
     };
     cobalt: {
       enabled: boolean;
@@ -97,7 +99,7 @@ export const config: AppConfig = {
   maxConcurrentDownloads: parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || '3', 10),
 
   rateLimit: {
-    maxRequests: parseInt(process.env.RATE_LIMIT_MAX || process.env.RATE_LIMIT_MAX_REQUESTS || '20', 10),
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX || process.env.RATE_LIMIT_MAX_REQUESTS || '10', 10),
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW || process.env.RATE_LIMIT_WINDOW_MS || '3600000', 10), // 1 hour
     adminMaxRequests: parseInt(process.env.ADMIN_RATE_LIMIT_MAX_REQUESTS || '1000', 10),
     adminWindowMs: parseInt(process.env.ADMIN_RATE_LIMIT_WINDOW_MS || '3600000', 10),
@@ -118,6 +120,8 @@ export const config: AppConfig = {
       timeoutMs: parseInt(process.env.YTDLP_TIMEOUT || process.env.YTDLP_TIMEOUT_MS || '45000', 10),
       maxFileSize,
       maxFileSizeBytes: parseSizeToBytes(maxFileSize),
+      jsRuntime: (process.env.YTDLP_JS_RUNTIME || 'auto').toLowerCase().trim(),
+      ejsSource: (process.env.YTDLP_EJS_SOURCE || 'github').toLowerCase().trim(),
     },
     cobalt: {
       enabled: process.env.COBALT_ENABLED !== 'false',

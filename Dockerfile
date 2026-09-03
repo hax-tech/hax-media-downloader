@@ -34,16 +34,23 @@ RUN apk add --no-cache \
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp
 
-# Create temp storage directory
-RUN mkdir -p /app/temp && chmod 777 /app/temp
+# Create non-root user and group
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Create temp storage directory with ownership
+RUN mkdir -p /app/temp && chown -R appuser:appgroup /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Copy compiled build artifacts
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/index.html ./index.html
-COPY --from=builder /app/scripts ./scripts
+COPY --from=builder --chown=appuser:appgroup /app/dist ./dist
+COPY --from=builder --chown=appuser:appgroup /app/index.html ./index.html
+COPY --from=builder --chown=appuser:appgroup /app/scripts ./scripts
+COPY --from=builder --chown=appuser:appgroup /app/cron ./cron
+
+# Switch to non-root execution
+USER appuser
 
 EXPOSE 3000
 

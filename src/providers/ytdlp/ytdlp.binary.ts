@@ -8,6 +8,14 @@ import { DownloaderError } from '../../utils/errors.ts';
 
 const execFileAsync = promisify(execFile);
 
+export interface JsRuntimeInfo {
+  available: boolean;
+  name: string;
+  version?: string;
+  path?: string;
+  warning?: string;
+}
+
 export class YtDlpBinaryManager {
   private static cachedPath: string | null = null;
   private static lastCheckTime = 0;
@@ -15,6 +23,8 @@ export class YtDlpBinaryManager {
   private static version = 'unknown';
   private static ffmpegChecked = false;
   private static ffmpegAvailable = false;
+  private static jsRuntimeInfo: JsRuntimeInfo | null = null;
+  private static lastJsCheckTime = 0;
 
   /**
    * Finds the best available path to the yt-dlp executable.
@@ -77,6 +87,98 @@ export class YtDlpBinaryManager {
     this.version = 'not found';
     this.lastCheckTime = now;
     return { available: false, version: 'not found' };
+  }
+
+  /**
+   * Resolves supported JavaScript runtime for YouTube challenge solving.
+   * Prefers Deno 2.x, or Node.js 22+. Rejects Node <= 20.
+   */
+  static async resolveJsRuntime(): Promise<JsRuntimeInfo> {
+    const now = Date.now();
+    if (this.jsRuntimeInfo && now - this.lastJsCheckTime < 60000) {
+      return this.jsRuntimeInfo;
+    }
+
+    const preferred = config.providers.ytdlp.jsRuntime;
+
+    if (preferred === 'none') {
+      this.jsRuntimeInfo = { available: false, name: 'none', warning: 'JS runtime explicitly disabled' };
+      this.lastJsCheckTime = now;
+      return this.jsRuntimeInfo;
+    }
+
+    // Check Deno if preferred or 'auto'
+    if (preferred === 'deno' || preferred === 'auto') {
+      try {
+        const { stdout } = await execFileAsync('deno', ['--version'], { timeout: 4000 });
+        const firstLine = stdout.trim().split('\n')[0] || '';
+        const verMatch = firstLine.match(/deno\s+([0-9.]+)/i);
+        const version = verMatch ? verMatch[1] : firstLine;
+        this.jsRuntimeInfo = { available: true, name: 'deno', version };
+        this.lastJsCheckTime = now;
+        return this.jsRuntimeInfo;
+      } catch {
+        // Deno not available
+      }
+    }
+
+    // Check Node.js if preferred or 'auto'
+    if (preferred === 'node' || preferred === 'auto') {
+      try {
+        const { stdout } = await execFileAsync('node', ['--version'], { timeout: 4000 });
+        const version = stdout.trim();
+        const majorMatch = version.match(/^v?(\d+)/);
+        const major = majorMatch ? parseInt(majorMatch[1], 10) : 0;
+
+        if (major >= 22) {
+          this.jsRuntimeInfo = { available: true, name: 'node', version };
+        } else if (major > 0) {
+          this.jsRuntimeInfo = {
+            available: false,
+            name: 'node',
+            version,
+            warning: `Node.js ${version} is below version 22. Deno 2.x or Node 22+ required for yt-dlp EJS runtime.`,
+          };
+        }
+        this.lastJsCheckTime = now;
+        if (this.jsRuntimeInfo) return this.jsRuntimeInfo;
+      } catch {
+        // Node not available
+      }
+    }
+
+    this.jsRuntimeInfo = {
+      available: false,
+      name: preferred,
+      warning: 'No compatible JavaScript runtime (Deno or Node 22+) detected on PATH',
+    };
+    this.lastJsCheckTime = now;
+    return this.jsRuntimeInfo;
+  }
+
+  /**
+   * Returns command arguments for JS runtime configuration.
+   */
+  static async getJsRuntimeArgs(): Promise<string[]> {
+    const runtime = await this.resolveJsRuntime();
+    if (runtime.available && (runtime.name === 'deno' || runtime.name === 'node')) {
+      return ['--js-runtimes', runtime.name];
+    }
+    return [];
+  }
+
+  /**
+   * Returns command arguments for remote EJS components if configured.
+   */
+  static getEjsArgs(): string[] {
+    const source = config.providers.ytdlp.ejsSource;
+    if (source === 'github') {
+      return ['--remote-components', 'ejs:github'];
+    }
+    if (source === 'npm') {
+      return ['--remote-components', 'ejs:npm'];
+    }
+    return [];
   }
 
   /**

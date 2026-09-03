@@ -5,6 +5,7 @@ import { errorHandler, notFoundHandler } from './src/middleware/error.middleware
 import { config } from './src/config/index.ts';
 import { logger } from './src/utils/logger.ts';
 import { providerManager } from './src/services/provider-manager/provider-manager.service.ts';
+import { storageService } from './src/services/storage/storage.service.ts';
 import { createServer as createViteServer } from 'vite';
 
 async function startServer() {
@@ -44,11 +45,41 @@ async function startServer() {
   // Centralized Error Middleware
   app.use(errorHandler);
 
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, () => {
     logger.info(`hax-media-downloader API server listening on http://${HOST}:${PORT}`);
     logger.info(`API Base URL: http://${HOST}:${PORT}/api`);
     logger.info(`Author: ${config.author} | Client Consumer: Tanu-xai`);
   });
+
+  // Graceful shutdown handling
+  let isShuttingDown = false;
+  const gracefulShutdown = async (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    logger.info(`Received ${signal}. Initiating graceful shutdown...`);
+
+    // Clean up temporary files on shutdown
+    try {
+      await storageService.cleanupAllTemp();
+      logger.info('Cleaned up temporary media storage');
+    } catch (err) {
+      logger.warn(`Error cleaning up temporary storage: ${(err as Error).message}`);
+    }
+
+    server.close(() => {
+      logger.info('Server HTTP listener closed');
+      process.exit(0);
+    });
+
+    // Force exit if connections take too long to close
+    setTimeout(() => {
+      logger.warn('Forcing shutdown after timeout');
+      process.exit(0);
+    }, 5000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 startServer().catch((err) => {

@@ -16,23 +16,23 @@ export async function runYtDlpProviderTests() {
 
   // 1. Test Command Construction / Format Selector
   console.log('1. Testing format selector generation...');
-  const f720 = buildYtDlpFormatSelector({ type: 'video', quality: '720p', format: 'mp4' });
+  const f720 = buildYtDlpFormatSelector({ type: 'video', quality: '720p', format: 'mp4' }, true);
   assert.ok(f720.selector.includes('height<=720'), 'Should constrain height to 720');
   assert.ok(f720.extraArgs.includes('--merge-output-format'), 'Should merge output to MP4');
 
-  const f1080 = buildYtDlpFormatSelector({ type: 'video', quality: '1080p' });
+  const f1080 = buildYtDlpFormatSelector({ type: 'video', quality: '1080p' }, true);
   assert.ok(f1080.selector.includes('height<=1080'), 'Should constrain height to 1080');
 
-  const f360 = buildYtDlpFormatSelector({ type: 'video', quality: '360p' });
+  const f360 = buildYtDlpFormatSelector({ type: 'video', quality: '360p' }, true);
   assert.ok(f360.selector.includes('height<=360'), 'Should constrain height to 360');
 
-  const fBest = buildYtDlpFormatSelector({ type: 'video', quality: 'best' });
-  assert.ok(fBest.selector.includes('bestvideo[ext=mp4]'), 'Best quality should prefer bestvideo[ext=mp4]');
+  const fBest = buildYtDlpFormatSelector({ type: 'video', quality: 'best' }, true);
+  assert.ok(fBest.selector.includes('bestvideo'), 'Best quality should select bestvideo');
 
-  const fAudioMp3 = buildYtDlpFormatSelector({ type: 'audio', format: 'mp3' });
+  const fAudioMp3 = buildYtDlpFormatSelector({ type: 'audio', format: 'mp3' }, true);
   assert.ok(fAudioMp3.extraArgs.includes('mp3'), 'Audio MP3 should pass --audio-format mp3');
 
-  const fAudioM4a = buildYtDlpFormatSelector({ type: 'audio', format: 'm4a' });
+  const fAudioM4a = buildYtDlpFormatSelector({ type: 'audio', format: 'm4a' }, true);
   assert.ok(fAudioM4a.selector.includes('bestaudio[ext=m4a]'), 'Audio M4A should request bestaudio[ext=m4a]');
 
   // 2. Test JSON Output Parsing (Preamble stripping & error handling)
@@ -109,32 +109,93 @@ WARNING: [youtube] JavaScript runtime node is deprecated.
   assert.strictEqual(disallowedValidation.isValid, false);
   assert.ok(disallowedValidation.error?.includes('Disallowed media extension'), 'Should reject disallowed extension');
 
-  // 5. Test Job State Transitions
-  console.log('5. Testing job state transitions...');
-  const dummyUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
-  const createdJob = await downloadService.createDownloadJob(dummyUrl, { quality: '720p' });
-  assert.ok(createdJob.id.startsWith('job_'), 'Job ID should be generated');
-  assert.ok(['queued', 'processing', 'completed'].includes(createdJob.status), 'Initial status should be queued or processing');
+  // 5. Test Job State Transitions & Per-Job Isolation
+  console.log('5. Testing job state transitions & storage isolation...');
+  const stateJobId = 'job_state_test_001';
+  const jobDir = storageService.createJobDirectory(stateJobId);
+  assert.ok(fs.existsSync(jobDir), 'Job directory must be created');
 
-  const fetchedJob = await downloadService.getJob(createdJob.id);
-  assert.ok(fetchedJob, 'Job should be retrievable from database');
+  await db.saveJob({
+    id: stateJobId,
+    sourceUrl: 'https://www.youtube.com/watch?v=mock_video_123',
+    platform: 'youtube',
+    provider: 'yt-dlp',
+    status: 'queued',
+    progress: null,
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+  });
 
-  // 6. Optional Real Integration Test (enabled via RUN_PROVIDER_INTEGRATION_TESTS=true)
+  const queuedJob = await db.getJobById(stateJobId);
+  assert.strictEqual(queuedJob?.status, 'queued');
+  assert.strictEqual(queuedJob?.progress, null);
+
+  await db.updateJobStatus(stateJobId, 'processing');
+  const processingJob = await db.getJobById(stateJobId);
+  assert.strictEqual(processingJob?.status, 'processing');
+
+  await db.updateJobStatus(stateJobId, 'completed');
+  const completedJob = await db.getJobById(stateJobId);
+  assert.strictEqual(completedJob?.status, 'completed');
+
+  await storageService.cleanupJob(stateJobId);
+  assert.strictEqual(fs.existsSync(jobDir), false, 'Job directory should be deleted on cleanup');
+
+  // 6. Real Integration Test (enabled via RUN_PROVIDER_INTEGRATION_TESTS=true)
   if (process.env.RUN_PROVIDER_INTEGRATION_TESTS === 'true') {
-    console.log('6. Running real yt-dlp integration test...');
+    console.log('6. Running live provider integration test (RUN_PROVIDER_INTEGRATION_TESTS=true)...');
+    const { YtDlpBinaryManager } = await import('../src/providers/ytdlp/ytdlp.binary.ts');
+    
+    // 6a. Binary detection
+    const binary = await YtDlpBinaryManager.resolveBinary();
+    console.log(`yt-dlp binary available: ${binary.available} (path: ${binary.path}, version: ${binary.version})`);
+    assert.ok(binary.available, 'yt-dlp binary must be available for integration test');
+
+    // 6b. FFmpeg detection
+    const hasFfmpeg = await YtDlpBinaryManager.checkFfmpeg();
+    console.log(`FFmpeg available: ${hasFfmpeg}`);
+
+    // 6c. JS runtime detection
+    const jsRuntime = await YtDlpBinaryManager.resolveJsRuntime();
+    console.log(`JS runtime: ${jsRuntime.name} (available: ${jsRuntime.available}, version: ${jsRuntime.version || 'none'})`);
+
+    // 6d. Health check
     const provider = new YtDlpProvider();
     const health = await provider.healthCheck();
-    console.log(`yt-dlp health: ${health.statusMessage}`);
+    console.log(`Health check: ${health.statusMessage}`);
+    assert.strictEqual(health.available, true, 'Provider must report available in integration test');
 
-    if (health.available) {
-      const searchResults = await provider.search('never gonna give you up', 'youtube');
-      assert.ok(Array.isArray(searchResults), 'Search should return an array');
-      console.log(`yt-dlp search returned ${searchResults.length} entries`);
-      if (searchResults.length > 0) {
-        assert.ok(searchResults[0].title, 'First search result should have title');
-        assert.ok(searchResults[0].url, 'First search result should have URL');
-      }
-    }
+    // 6e. Metadata extraction against small public test URL (YouTube's first video, 19 seconds)
+    const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+    console.log(`Extracting metadata for: ${testUrl}`);
+    const mediaInfo = await provider.getInfo(testUrl);
+    assert.ok(mediaInfo.title, 'Media info must contain title');
+    assert.strictEqual(mediaInfo.platform, 'youtube');
+    console.log(`Extracted metadata successfully: "${mediaInfo.title}" (${mediaInfo.duration}s)`);
+
+    // 6f. Real small download test
+    console.log('Testing live download & validation...');
+    const liveJobId = `int_test_${Date.now()}`;
+    const downloadRes = await provider.download(testUrl, {
+      type: 'audio',
+      format: 'm4a',
+      quality: '360p',
+      jobId: liveJobId,
+    });
+
+    assert.strictEqual(downloadRes.success, true, 'Download must succeed');
+    assert.ok(downloadRes.size > 0, 'Downloaded file size must be > 0');
+    assert.ok(downloadRes.filePath, 'Downloaded file path must be defined');
+    assert.ok(fs.existsSync(downloadRes.filePath), 'Downloaded file must exist on disk');
+
+    const fileValidation = await storageService.validateDownloadedFile(downloadRes.filePath);
+    assert.strictEqual(fileValidation.isValid, true, 'Downloaded file must pass validation');
+
+    // 6g. Cleanup live test files
+    await storageService.cleanupJob(liveJobId);
+    console.log('Cleaned up integration test files successfully.');
+  } else {
+    console.log('6. Real provider integration tests skipped (set RUN_PROVIDER_INTEGRATION_TESTS=true to run live network test).');
   }
 
   console.log('✓ All yt-dlp provider tests passed.');

@@ -51,16 +51,54 @@ export class StorageService {
   }
 
   /**
-   * Generates an isolated, unpredictable safe path inside TEMP_DIR.
+   * Creates an isolated, unique directory for a job inside tempDir.
    */
-  generateSafeFilePath(jobId: string, ext = 'mp4'): { filePath: string; fileToken: string } {
+  createJobDirectory(jobId: string): string {
     this.ensureDirectory();
+    // Sanitize jobId to alphanumeric and underscores only
+    const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, '') || `job_${crypto.randomBytes(6).toString('hex')}`;
+    const jobDir = path.join(this.tempDir, safeJobId);
+    if (!fs.existsSync(jobDir)) {
+      fs.mkdirSync(jobDir, { recursive: true, mode: 0o700 });
+    }
+    return jobDir;
+  }
+
+  /**
+   * Generates an isolated, unpredictable safe path inside a unique per-job directory.
+   */
+  generateSafeFilePath(jobId: string, ext = 'mp4'): { filePath: string; fileToken: string; jobDir: string } {
+    const jobDir = this.createJobDirectory(jobId);
     const safeExt = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'mp4';
     const randomHex = crypto.randomBytes(8).toString('hex');
-    const safeBaseName = `${jobId}_${randomHex}.${safeExt}`;
-    const filePath = path.join(this.tempDir, safeBaseName);
+    const safeBaseName = `media_${randomHex}.${safeExt}`;
+    const filePath = path.join(jobDir, safeBaseName);
     const fileToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
-    return { filePath, fileToken };
+    return { filePath, fileToken, jobDir };
+  }
+
+  /**
+   * Cleans up an entire job directory and associated tokens.
+   */
+  async cleanupJob(jobId: string): Promise<void> {
+    const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeJobId) return;
+
+    // Invalidate tokens for this job
+    for (const [token, entry] of this.tokenToFileMap.entries()) {
+      if (entry.jobId === safeJobId) {
+        this.tokenToFileMap.delete(token);
+      }
+    }
+
+    const jobDir = path.join(this.tempDir, safeJobId);
+    try {
+      if (fs.existsSync(jobDir)) {
+        await fs.promises.rm(jobDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      logger.warn(`Could not delete job directory ${jobDir}: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -289,23 +327,27 @@ export class StorageService {
   }
 
   /**
-   * Purges expired files and tokens from the temporary directory.
+   * Purges expired files and directories from the temporary directory.
    */
   async purgeExpiredFiles(maxAgeSeconds = config.cache.jobExpirationSeconds): Promise<number> {
     this.purgeExpiredTokens();
     let deletedCount = 0;
     try {
       this.ensureDirectory();
-      const files = await fs.promises.readdir(this.tempDir);
+      const entries = await fs.promises.readdir(this.tempDir, { withFileTypes: true });
       const now = Date.now();
       const maxAgeMs = maxAgeSeconds * 1000;
 
-      for (const file of files) {
-        const fullPath = path.join(this.tempDir, file);
+      for (const entry of entries) {
+        const fullPath = path.join(this.tempDir, entry.name);
         try {
           const stat = await fs.promises.stat(fullPath);
           if (now - stat.mtimeMs > maxAgeMs) {
-            await fs.promises.unlink(fullPath);
+            if (entry.isDirectory()) {
+              await fs.promises.rm(fullPath, { recursive: true, force: true });
+            } else {
+              await fs.promises.unlink(fullPath);
+            }
             deletedCount++;
           }
         } catch {
@@ -316,6 +358,24 @@ export class StorageService {
       logger.warn(`Failed during temp directory file purge: ${(err as Error).message}`);
     }
     return deletedCount;
+  }
+
+  /**
+   * Cleans up all temporary storage on application shutdown.
+   */
+  async cleanupAllTemp(): Promise<void> {
+    try {
+      this.tokenToFileMap.clear();
+      if (fs.existsSync(this.tempDir)) {
+        const entries = await fs.promises.readdir(this.tempDir);
+        for (const entry of entries) {
+          const fullPath = path.join(this.tempDir, entry);
+          await fs.promises.rm(fullPath, { recursive: true, force: true }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed during cleanupAllTemp: ${(err as Error).message}`);
+    }
   }
 
   private purgeExpiredTokens(): void {
