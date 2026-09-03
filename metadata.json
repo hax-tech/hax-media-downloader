@@ -1,0 +1,6 @@
+{
+  "name": "hax-media-downloader",
+  "description": "Production-ready multi-platform media downloader API & dashboard for WhatsApp bot Tanu-xai",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
