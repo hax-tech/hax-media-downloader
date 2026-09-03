@@ -14,6 +14,7 @@ import { detectPlatform } from '../../utils/platform-detector.ts';
 import { config } from '../../config/index.ts';
 import { logger } from '../../utils/logger.ts';
 import { db } from '../../database/repositories/memory-database.ts';
+import { DownloaderError } from '../../utils/errors.ts';
 
 export class ProviderManager {
   private providers: Map<string, DownloaderProvider> = new Map();
@@ -38,7 +39,7 @@ export class ProviderManager {
   }
 
   /**
-   * Resolves eligible providers for a URL ordered by configured priority.
+   * Resolves eligible providers for a URL ordered by configured priority (yt-dlp -> cobalt -> external-api).
    */
   getOrderedProvidersForUrl(url: string): DownloaderProvider[] {
     const platform = detectPlatform(url);
@@ -48,9 +49,10 @@ export class ProviderManager {
 
     // Priority map from config
     const priorityList = config.providers.priority.map((p) => {
-      if (p === 'ytdlp') return 'yt-dlp';
-      if (p === 'external') return 'external-api';
-      return p;
+      const lower = p.toLowerCase();
+      if (lower === 'ytdlp' || lower === 'yt-dlp') return 'yt-dlp';
+      if (lower === 'external' || lower === 'external-api') return 'external-api';
+      return lower;
     });
 
     return available.sort((a, b) => {
@@ -63,20 +65,22 @@ export class ProviderManager {
   }
 
   /**
-   * Fetches media info by trying providers in priority order with automatic fallback.
+   * Fetches media info by trying providers in priority order with deterministic fallback.
    */
   async getInfo(url: string, options?: DownloadOptions): Promise<{ info: MediaInfo; providerUsed: string }> {
     const platform = detectPlatform(url);
     if (!platform) {
-      throw new Error('Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest.');
+      throw DownloaderError.unsupportedPlatform(
+        'Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest.'
+      );
     }
 
     const orderedProviders = this.getOrderedProvidersForUrl(url);
     if (orderedProviders.length === 0) {
-      throw new Error(`No downloader providers configured to handle platform: ${platform}`);
+      throw DownloaderError.providerUnavailable(`No downloader providers configured to handle platform: ${platform}`);
     }
 
-    const errors: Array<{ provider: string; error: string }> = [];
+    const failureLogs: Array<{ provider: string; error: string; code?: string }> = [];
 
     for (const provider of orderedProviders) {
       const start = Date.now();
@@ -89,32 +93,48 @@ export class ProviderManager {
         return { info, providerUsed: provider.name };
       } catch (err: unknown) {
         const duration = Date.now() - start;
-        const msg = (err as Error).message;
-        logger.warn(`Provider ${provider.name} failed getInfo: ${msg}`);
+        const error = err as Error & { code?: string };
+        const msg = error.message;
+
+        logger.warn(`Provider ${provider.name} failed getInfo`, {
+          provider: provider.name,
+          error: msg,
+          code: error.code,
+        });
         await db.recordProviderCall(provider.name, false, duration, msg);
-        errors.push({ provider: provider.name, error: msg });
+
+        // If error is an invalid URL or unsupported format, do NOT fallback to other providers
+        if (error instanceof DownloaderError && (error.code === 'INVALID_URL' || error.code === 'UNSUPPORTED_PLATFORM')) {
+          throw error;
+        }
+
+        failureLogs.push({ provider: provider.name, error: msg, code: error.code });
       }
     }
 
-    const errorSummary = errors.map((e) => `${e.provider}: ${e.error}`).join(' | ');
-    throw new Error(`All providers failed to extract media info. (${errorSummary})`);
+    const summary = failureLogs.map((f) => `${f.provider}: ${f.error}`).join(' | ');
+    throw DownloaderError.providerFailed(`All providers failed to extract media info. (${summary})`, {
+      attempts: failureLogs,
+    });
   }
 
   /**
-   * Executes download by trying providers in priority order with automatic fallback.
+   * Executes download by trying providers in priority order with deterministic fallback.
    */
   async download(url: string, options?: DownloadOptions): Promise<NormalizedDownloadResult> {
     const platform = detectPlatform(url);
     if (!platform) {
-      throw new Error('Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest.');
+      throw DownloaderError.unsupportedPlatform(
+        'Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest.'
+      );
     }
 
     const orderedProviders = this.getOrderedProvidersForUrl(url);
     if (orderedProviders.length === 0) {
-      throw new Error(`No providers available for platform: ${platform}`);
+      throw DownloaderError.providerUnavailable(`No providers available for platform: ${platform}`);
     }
 
-    const errors: Array<{ provider: string; error: string }> = [];
+    const failureLogs: Array<{ provider: string; error: string; code?: string }> = [];
 
     for (const provider of orderedProviders) {
       const start = Date.now();
@@ -125,21 +145,34 @@ export class ProviderManager {
 
         await db.recordProviderCall(provider.name, true, duration);
 
-        // Ensure normalized fields are compliant
         result.provider = provider.name;
         result.platform = platform;
         return result;
       } catch (err: unknown) {
         const duration = Date.now() - start;
-        const msg = (err as Error).message;
-        logger.warn(`Provider ${provider.name} failed download: ${msg}`);
+        const error = err as Error & { code?: string };
+        const msg = error.message;
+
+        logger.warn(`Provider ${provider.name} failed download`, {
+          provider: provider.name,
+          error: msg,
+          code: error.code,
+        });
         await db.recordProviderCall(provider.name, false, duration, msg);
-        errors.push({ provider: provider.name, error: msg });
+
+        // Do not fallback on user input errors
+        if (error instanceof DownloaderError && (error.code === 'INVALID_URL' || error.code === 'UNSUPPORTED_PLATFORM')) {
+          throw error;
+        }
+
+        failureLogs.push({ provider: provider.name, error: msg, code: error.code });
       }
     }
 
-    const errorSummary = errors.map((e) => `${e.provider}: ${e.error}`).join(' | ');
-    throw new Error(`All providers failed to download media. (${errorSummary})`);
+    const summary = failureLogs.map((f) => `${f.provider}: ${f.error}`).join(' | ');
+    throw DownloaderError.providerFailed(`All providers failed to download media. (${summary})`, {
+      attempts: failureLogs,
+    });
   }
 
   /**
@@ -168,7 +201,7 @@ export class ProviderManager {
   }
 
   /**
-   * Multi-provider search.
+   * Multi-provider search (YouTube via yt-dlp).
    */
   async search(query: string, platform?: Platform): Promise<SearchResultItem[]> {
     for (const provider of this.getAllProviders()) {
@@ -179,7 +212,7 @@ export class ProviderManager {
             return items;
           }
         } catch {
-          // fallback to next
+          // fallback to next provider
         }
       }
     }

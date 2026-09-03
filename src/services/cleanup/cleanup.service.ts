@@ -1,10 +1,11 @@
 import { db } from '../../database/repositories/memory-database.ts';
+import { storageService } from '../storage/storage.service.ts';
 import { CleanupStats } from '../../types/index.ts';
 import { logger } from '../../utils/logger.ts';
 
 export class CleanupService {
   /**
-   * Executes complete database & cache garbage collection.
+   * Executes complete database, cache & temporary storage garbage collection.
    */
   async runCleanup(): Promise<CleanupStats> {
     const executedAt = new Date().toISOString();
@@ -23,6 +24,9 @@ export class CleanupService {
     // 4. Clean expired rate limits
     await db.cleanExpiredRateLimits(Date.now());
 
+    // 5. Purge expired files from temporary storage
+    const filesPurged = await storageService.purgeExpiredFiles();
+
     const stats: CleanupStats = {
       expiredJobsDeleted,
       staleCacheEntriesRemoved,
@@ -30,7 +34,7 @@ export class CleanupService {
       executedAt,
     };
 
-    logger.info('System cleanup complete', { stats });
+    logger.info('System cleanup complete', { stats, filesPurged });
     return stats;
   }
 }

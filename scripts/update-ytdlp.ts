@@ -1,9 +1,9 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { YtDlpBinaryManager } from '../src/providers/ytdlp/ytdlp.binary.ts';
 import { logger } from '../src/utils/logger.ts';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Script to safely verify and upgrade yt-dlp to latest official release.
@@ -25,7 +25,7 @@ export async function updateYtDlp() {
   console.log('[yt-dlp Updater] Executing official updater: yt-dlp -U ...');
 
   try {
-    const { stdout, stderr } = await execAsync(`"${resolution.path}" -U`);
+    const { stdout, stderr } = await execFileAsync(resolution.path, ['-U']);
     console.log(stdout || stderr);
     console.log('[yt-dlp Updater] Update check completed.');
   } catch (err) {

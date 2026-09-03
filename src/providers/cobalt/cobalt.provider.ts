@@ -8,6 +8,7 @@ import {
 } from '../../types/index.ts';
 import { config } from '../../config/index.ts';
 import { detectPlatform } from '../../utils/platform-detector.ts';
+import { DownloaderError } from '../../utils/errors.ts';
 
 export class CobaltProvider extends BaseProvider {
   readonly name = 'cobalt';
@@ -49,7 +50,7 @@ export class CobaltProvider extends BaseProvider {
         headers['Authorization'] = `Bearer ${config.providers.cobalt.apiKey}`;
       }
 
-      // Try /api/serverInfo or base url
+      // Check serverInfo or root
       const res = await fetch(`${baseUrl}/api/serverInfo`, {
         method: 'GET',
         headers,
@@ -99,38 +100,49 @@ export class CobaltProvider extends BaseProvider {
   }
 
   async getInfo(url: string, options?: DownloadOptions): Promise<MediaInfo> {
-    const platform = detectPlatform(url) || 'youtube';
-    const baseUrl = this.getBaseUrl();
-    if (!baseUrl) {
-      throw new Error('Cobalt provider is unavailable: COBALT_API_URL is not configured.');
+    const platform = detectPlatform(url);
+    if (!platform) {
+      throw DownloaderError.unsupportedPlatform(`Unsupported platform for URL: ${url}`);
     }
 
-    // Attempt normalized extraction through Cobalt or fallback
+    const baseUrl = this.getBaseUrl();
+    if (!baseUrl) {
+      throw DownloaderError.cobaltUnavailable('Cobalt provider is unavailable: COBALT_API_URL is not configured.');
+    }
+
+    // Call Cobalt to extract download details
     const result = await this.download(url, { ...options, type: 'video' });
     return {
       id: Buffer.from(url).toString('base64').slice(0, 16),
       title: result.title,
+      uploader: 'Cobalt Media Source',
+      author: 'Cobalt Media Source',
       thumbnail: result.thumbnail,
       duration: result.duration,
       platform,
       url,
+      webpageUrl: url,
       originalUrl: url,
-      availableQualities: ['360p', '480p', '720p', '1080p', '1440p', '2160p'],
-      availableFormats: ['mp4', 'mp3', 'webm', 'ogg'],
+      availableQualities: ['360p', '480p', '720p', '1080p', 'best'],
+      availableFormats: ['mp4', 'mp3', 'm4a', 'webm'],
     };
   }
 
   async download(url: string, options?: DownloadOptions): Promise<NormalizedDownloadResult> {
-    const platform = detectPlatform(url) || 'youtube';
+    const platform = detectPlatform(url);
+    if (!platform) {
+      throw DownloaderError.unsupportedPlatform(`Unsupported platform for URL: ${url}`);
+    }
+
     const baseUrl = this.getBaseUrl();
     if (!baseUrl) {
-      throw new Error('Cobalt provider is unavailable: COBALT_API_URL is not configured.');
+      throw DownloaderError.cobaltUnavailable('Cobalt provider is unavailable: COBALT_API_URL is not configured.');
     }
 
     const timeoutMs = options?.timeoutMs || config.providers.cobalt.timeoutMs;
     const isAudio = options?.type === 'audio';
 
-    // Map quality to Cobalt syntax: 'max', '4320', '2160', '1440', '1080', '720', '480', '360'
+    // Map quality to Cobalt API v7/v10 syntax
     let vQuality = '720';
     if (options?.quality) {
       const match = options.quality.match(/\d+/);
@@ -159,7 +171,6 @@ export class CobaltProvider extends BaseProvider {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      // Cobalt v7+ uses POST / or /api/json
       let response = await fetch(`${baseUrl}/`, {
         method: 'POST',
         headers,
@@ -168,7 +179,6 @@ export class CobaltProvider extends BaseProvider {
       });
 
       if (response.status === 404) {
-        // Try fallback route /api/json
         response = await fetch(`${baseUrl}/api/json`, {
           method: 'POST',
           headers,
@@ -179,7 +189,7 @@ export class CobaltProvider extends BaseProvider {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Cobalt API error (${response.status}): ${errorText.slice(0, 200)}`);
+        throw DownloaderError.providerFailed(`Cobalt API error (${response.status}): ${errorText.slice(0, 200)}`);
       }
 
       const data = await response.json();
@@ -194,27 +204,36 @@ export class CobaltProvider extends BaseProvider {
       }
 
       if (!directUrl) {
-        throw new Error(data.text || data.message || 'Cobalt returned an invalid or empty download URL');
+        const errMsg = data.error?.code || data.text || data.message || 'Cobalt returned no media stream URL';
+        throw DownloaderError.providerFailed(`Cobalt error: ${errMsg}`);
       }
 
+      const cleanTitle = data.filename || `media_${platform}`;
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
       return {
         success: true,
         platform,
         provider: this.name,
-        title: data.filename || `Downloaded from ${platform}`,
+        title: cleanTitle,
         thumbnail: undefined,
         duration: 0,
         format: options?.format || (isAudio ? 'mp3' : 'mp4'),
         quality: options?.quality || `${vQuality}p`,
         url: directUrl,
+        downloadUrl: directUrl,
         expiresAt,
-        jobId: '',
+        jobId: (options?.jobId as string) || '',
         metadata: {
           cobaltStatus: data.status,
         },
       };
+    } catch (err: unknown) {
+      if ((err as Error).name === 'AbortError') {
+        throw DownloaderError.timeout(`Cobalt request timed out after ${timeoutMs}ms`);
+      }
+      if (err instanceof DownloaderError) throw err;
+      throw DownloaderError.providerFailed(`Cobalt failed: ${(err as Error).message}`);
     } finally {
       clearTimeout(timeout);
     }

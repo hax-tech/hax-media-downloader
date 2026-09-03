@@ -33,21 +33,25 @@ export default function App() {
         if (pData.priorityOrder) setPriorityOrder(pData.priorityOrder);
       }
 
-      // 3. Admin stats & jobs (using default key or gracefully falling back)
-      const adminHeaders = {
-        'X-Admin-Key': 'hax-admin-super-secret-key-change-in-prod',
-      };
-
-      const statsRes = await fetch('/api/admin/stats', { headers: adminHeaders });
-      if (statsRes.ok) {
-        const sData = await statsRes.json();
-        if (sData.cache) setCacheStats(sData.cache);
+      // 3. Admin stats & jobs (retrieved from sessionStorage if authenticated)
+      const sessionKey = sessionStorage.getItem('hax_admin_key') || '';
+      const adminHeaders: Record<string, string> = {};
+      if (sessionKey) {
+        adminHeaders['X-Admin-Key'] = sessionKey;
       }
 
-      const jobsRes = await fetch('/api/admin/jobs?limit=25', { headers: adminHeaders });
-      if (jobsRes.ok) {
-        const jData = await jobsRes.json();
-        if (jData.jobs) setJobs(jData.jobs);
+      if (sessionKey) {
+        const statsRes = await fetch('/api/admin/stats', { headers: adminHeaders });
+        if (statsRes.ok) {
+          const sData = await statsRes.json();
+          if (sData.cache) setCacheStats(sData.cache);
+        }
+
+        const jobsRes = await fetch('/api/admin/jobs?limit=25', { headers: adminHeaders });
+        if (jobsRes.ok) {
+          const jData = await jobsRes.json();
+          if (jData.jobs) setJobs(jData.jobs);
+        }
       }
     } catch {
       // Graceful fallback for offline or loading state

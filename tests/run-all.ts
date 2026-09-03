@@ -5,6 +5,7 @@ import { runProviderFallbackTests } from './provider-fallback.test.ts';
 import { runRateLimitingTests } from './rate-limiting.test.ts';
 import { runExpirationAndCleanupTests } from './expiration-and-cleanup.test.ts';
 import { runApiValidationTests } from './api-validation.test.ts';
+import { runYtDlpProviderTests } from './ytdlp-provider.test.ts';
 
 async function runAllTests() {
   console.log('====================================================');
@@ -21,6 +22,7 @@ async function runAllTests() {
     { name: 'Platform Detection', fn: runPlatformDetectionTests },
     { name: 'Provider Selection & Priority', fn: runProviderSelectionTests },
     { name: 'Provider Fallback Logic', fn: runProviderFallbackTests },
+    { name: 'yt-dlp Provider & File Validation', fn: runYtDlpProviderTests },
     { name: 'Rate Limiting', fn: runRateLimitingTests },
     { name: 'Expiration & Cache Cleanup', fn: runExpirationAndCleanupTests },
     { name: 'API Schema Validation', fn: runApiValidationTests },

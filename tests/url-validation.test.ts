@@ -11,6 +11,11 @@ export function runUrlValidationTests() {
   assert.strictEqual(isSafeUrl('http://169.254.169.254/latest/meta-data').safe, false, 'Cloud metadata IP should be blocked');
   assert.strictEqual(isSafeUrl('http://192.168.1.1').safe, false, 'Private class C should be blocked');
   assert.strictEqual(isSafeUrl('http://10.0.0.1').safe, false, 'Private class A should be blocked');
+  assert.strictEqual(isSafeUrl('http://2130706433').safe, false, 'Decimal IP notation (127.0.0.1) should be blocked');
+  assert.strictEqual(isSafeUrl('http://0x7f000001').safe, false, 'Hex IP notation (127.0.0.1) should be blocked');
+  assert.strictEqual(isSafeUrl('http://[::1]').safe, false, 'IPv6 loopback [::1] should be blocked');
+  assert.strictEqual(isSafeUrl('http://internal.corp').safe, false, 'Restricted internal domain should be blocked');
+  assert.strictEqual(isSafeUrl('https://www.youtube.com:22/watch?v=abc').safe, false, 'Non-standard port 22 should be restricted');
   assert.strictEqual(isSafeUrl('ftp://example.com').safe, false, 'FTP protocol should be blocked');
   assert.strictEqual(isSafeUrl('file:///etc/passwd').safe, false, 'File protocol should be blocked');
 

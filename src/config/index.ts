@@ -1,3 +1,4 @@
+import path from 'path';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -9,8 +10,11 @@ export interface AppConfig {
   appUrl: string;
   author: string;
   adminApiKey: string;
+  cronSecret: string;
   apiKeyHeader: string;
   corsOrigin: string;
+  tempDir: string;
+  maxConcurrentDownloads: number;
 
   rateLimit: {
     maxRequests: number;
@@ -32,6 +36,8 @@ export interface AppConfig {
       enabled: boolean;
       binaryPath: string;
       timeoutMs: number;
+      maxFileSize: string; // e.g. "100M"
+      maxFileSizeBytes: number;
     };
     cobalt: {
       enabled: boolean;
@@ -57,6 +63,25 @@ const parsePriority = (val?: string): string[] => {
     .filter(Boolean);
 };
 
+const parseSizeToBytes = (sizeStr: string): number => {
+  const match = sizeStr.trim().match(/^(\d+(?:\.\d+)?)\s*([kmgtpezy]?b?)$/i);
+  if (!match) return 100 * 1024 * 1024; // Default 100MB
+  const num = parseFloat(match[1]);
+  const unit = match[2].toUpperCase().charAt(0);
+  switch (unit) {
+    case 'K':
+      return Math.round(num * 1024);
+    case 'M':
+      return Math.round(num * 1024 * 1024);
+    case 'G':
+      return Math.round(num * 1024 * 1024 * 1024);
+    default:
+      return Math.round(num);
+  }
+};
+
+const maxFileSize = process.env.YTDLP_MAX_FILE_SIZE || '100M';
+
 export const config: AppConfig = {
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
@@ -64,30 +89,35 @@ export const config: AppConfig = {
   appName: process.env.APP_NAME || 'hax-media-downloader',
   appUrl: process.env.APP_URL || 'http://localhost:3000',
   author: 'Hamza',
-  adminApiKey: process.env.ADMIN_API_KEY || 'hax-admin-super-secret-key-change-in-prod',
+  adminApiKey: (process.env.ADMIN_API_KEY || '').trim(),
+  cronSecret: (process.env.CRON_SECRET || '').trim(),
   apiKeyHeader: (process.env.API_KEY_HEADER || 'x-api-key').toLowerCase(),
   corsOrigin: process.env.CORS_ORIGIN || '*',
+  tempDir: process.env.TEMP_DIR || path.join(process.cwd(), 'temp'),
+  maxConcurrentDownloads: parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || '3', 10),
 
   rateLimit: {
-    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '10', 10),
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '3600000', 10), // 1 hour
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX || process.env.RATE_LIMIT_MAX_REQUESTS || '20', 10),
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW || process.env.RATE_LIMIT_WINDOW_MS || '3600000', 10), // 1 hour
     adminMaxRequests: parseInt(process.env.ADMIN_RATE_LIMIT_MAX_REQUESTS || '1000', 10),
     adminWindowMs: parseInt(process.env.ADMIN_RATE_LIMIT_WINDOW_MS || '3600000', 10),
   },
 
   cache: {
     enabled: process.env.CACHE_ENABLED !== 'false',
-    ttlSeconds: parseInt(process.env.CACHE_TTL_SECONDS || '1800', 10), // 30 minutes
-    jobExpirationSeconds: parseInt(process.env.JOB_EXPIRATION_SECONDS || '3600', 10), // 1 hour
+    ttlSeconds: parseInt(process.env.CACHE_TTL || process.env.CACHE_TTL_SECONDS || '1800', 10), // 30 minutes
+    jobExpirationSeconds: parseInt(process.env.JOB_TTL || process.env.JOB_EXPIRATION_SECONDS || '3600', 10), // 1 hour
   },
 
   providers: {
     priority: parsePriority(process.env.PROVIDER_PRIORITY),
-    defaultTimeoutMs: parseInt(process.env.PROVIDER_TIMEOUT_MS || '15000', 10),
+    defaultTimeoutMs: parseInt(process.env.PROVIDER_TIMEOUT_MS || '30000', 10),
     ytdlp: {
       enabled: process.env.YTDLP_ENABLED !== 'false',
       binaryPath: process.env.YTDLP_PATH || 'yt-dlp',
-      timeoutMs: parseInt(process.env.YTDLP_TIMEOUT_MS || '30000', 10),
+      timeoutMs: parseInt(process.env.YTDLP_TIMEOUT || process.env.YTDLP_TIMEOUT_MS || '45000', 10),
+      maxFileSize,
+      maxFileSizeBytes: parseSizeToBytes(maxFileSize),
     },
     cobalt: {
       enabled: process.env.COBALT_ENABLED !== 'false',

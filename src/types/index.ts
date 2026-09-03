@@ -10,16 +10,30 @@ export interface DownloadOptions {
   [key: string]: unknown;
 }
 
+export interface MediaFormatInfo {
+  formatId: string;
+  ext: string;
+  resolution?: string;
+  height?: number;
+  filesize?: number;
+  note?: string;
+  vcodec?: string;
+  acodec?: string;
+}
+
 export interface MediaInfo {
   id: string;
   title: string;
   thumbnail?: string;
   duration?: number;
   author?: string;
+  uploader?: string;
   platform: Platform;
   availableQualities?: string[];
   availableFormats?: string[];
+  formats?: MediaFormatInfo[];
   url: string;
+  webpageUrl?: string;
   originalUrl: string;
 }
 
@@ -33,6 +47,11 @@ export interface NormalizedDownloadResult {
   format: string;
   quality: string;
   url: string;
+  downloadUrl?: string;
+  mimeType?: string;
+  size?: number;
+  filePath?: string; // internal storage path
+  fileToken?: string;
   expiresAt: string;
   jobId: string;
   metadata?: Record<string, unknown>;
@@ -46,7 +65,7 @@ export interface ProviderHealth {
   version?: string;
 }
 
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'expired';
+export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'expired';
 
 export interface DownloadJob {
   id: string;
@@ -55,11 +74,22 @@ export interface DownloadJob {
   platform: Platform;
   provider: string;
   status: JobStatus;
+  progress?: number | null;
   title?: string;
+  thumbnail?: string;
+  duration?: number;
+  format?: string;
+  quality?: string;
+  size?: number;
+  mimeType?: string;
   mediaUrl?: string;
+  downloadUrl?: string;
+  fileToken?: string;
+  filePath?: string; // internal storage reference only
   createdAt: string;
   expiresAt: string;
   error?: string;
+  errorCode?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -99,8 +129,10 @@ export interface SearchResultItem {
   id: string;
   title: string;
   url: string;
+  webpageUrl?: string;
   thumbnail?: string;
   duration?: number;
   platform: Platform;
   author?: string;
+  uploader?: string;
 }

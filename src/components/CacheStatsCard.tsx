@@ -17,29 +17,51 @@ export const CacheStatsCard: React.FC<CacheStatsCardProps> = ({ cache, onCleanup
     staleCacheEntriesRemoved: number;
     abandonedJobsMarkedExpired: number;
   } | null>(null);
-  const [adminKey, setAdminKey] = useState('');
+  const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem('hax_admin_key') || '');
   const [showAdminInput, setShowAdminInput] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  const saveKeyToSession = (key: string) => {
+    setAdminKey(key);
+    if (key.trim()) {
+      sessionStorage.setItem('hax_admin_key', key.trim());
+    } else {
+      sessionStorage.removeItem('hax_admin_key');
+    }
+  };
 
   const handleCleanup = async () => {
+    const keyToUse = adminKey.trim() || sessionStorage.getItem('hax_admin_key') || '';
+    if (!keyToUse) {
+      setShowAdminInput(true);
+      setErrorMessage('Admin API Key or Cron Secret required to trigger cleanup.');
+      return;
+    }
+
     setCleaning(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
     try {
       const res = await fetch('/api/admin/cache/cleanup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Admin-Key': adminKey || 'hax-admin-super-secret-key-change-in-prod',
+          'X-Admin-Key': keyToUse,
         },
       });
 
       const data = await res.json();
-      if (data.success && data.stats) {
+      if (res.ok && data.success && data.stats) {
         setLastStats(data.stats);
+        setInfoMessage('Garbage collector executed successfully.');
         onCleanupTriggered();
       } else {
-        alert(data.error || 'Cleanup unauthorized or failed. Check Admin API Key.');
+        setErrorMessage(data.error || 'Cleanup unauthorized. Please check your Admin API Key or CRON_SECRET.');
       }
     } catch {
-      alert('Failed to execute cleanup request.');
+      setErrorMessage('Network error while connecting to cleanup endpoint.');
     } finally {
       setCleaning(false);
     }
@@ -87,18 +109,30 @@ export const CacheStatsCard: React.FC<CacheStatsCardProps> = ({ cache, onCleanup
             <p>• Abandoned jobs marked: {lastStats.abandonedJobsMarkedExpired}</p>
           </div>
         )}
+        {errorMessage && (
+          <div className="mt-3 p-2.5 rounded-lg bg-rose-50 text-rose-800 text-xs border border-rose-200">
+            {errorMessage}
+          </div>
+        )}
+
+        {infoMessage && (
+          <div className="mt-3 p-2.5 rounded-lg bg-emerald-50 text-emerald-800 text-xs border border-emerald-200">
+            {infoMessage}
+          </div>
+        )}
       </div>
 
       <div className="pt-4 mt-4 border-t border-zinc-100">
         {showAdminInput && (
-          <div className="mb-2">
+          <div className="mb-2 space-y-1">
             <input
               type="password"
-              placeholder="Admin API Key (if modified from default)"
+              placeholder="Enter ADMIN_API_KEY or CRON_SECRET"
               value={adminKey}
-              onChange={(e) => setAdminKey(e.target.value)}
+              onChange={(e) => saveKeyToSession(e.target.value)}
               className="w-full text-xs px-2.5 py-1.5 border border-zinc-300 rounded font-mono"
             />
+            <p className="text-[11px] text-zinc-400">Stored in browser session for authenticated actions.</p>
           </div>
         )}
 
@@ -106,9 +140,9 @@ export const CacheStatsCard: React.FC<CacheStatsCardProps> = ({ cache, onCleanup
           <button
             type="button"
             onClick={() => setShowAdminInput(!showAdminInput)}
-            className="text-[11px] text-zinc-400 hover:text-zinc-600"
+            className="text-[11px] text-zinc-500 hover:text-zinc-800 underline"
           >
-            {showAdminInput ? 'Hide Key Input' : 'Configure Custom Key'}
+            {showAdminInput ? 'Hide Admin Key' : (adminKey ? 'Edit Admin Key' : 'Enter Admin Key')}
           </button>
 
           <button

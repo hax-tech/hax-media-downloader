@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { db } from '../../database/repositories/memory-database.ts';
 import { providerManager } from '../provider-manager/provider-manager.service.ts';
 import { cacheService } from '../cache/cache.service.ts';
+import { storageService } from '../storage/storage.service.ts';
 import { validateMediaUrl } from '../../utils/url-validator.ts';
 import { config } from '../../config/index.ts';
 import {
@@ -11,16 +12,29 @@ import {
   NormalizedDownloadResult,
   Platform,
 } from '../../types/index.ts';
+import { DownloaderError } from '../../utils/errors.ts';
 import { logger } from '../../utils/logger.ts';
 
+interface QueuedTask {
+  jobId: string;
+  url: string;
+  options: DownloadOptions;
+  userId?: string;
+  resolve?: (result: NormalizedDownloadResult) => void;
+  reject?: (err: Error) => void;
+}
+
 export class DownloadService {
+  private activeDownloads = 0;
+  private queue: QueuedTask[] = [];
+
   /**
    * Extracts media information with caching.
    */
   async getMediaInfo(url: string, options?: DownloadOptions): Promise<MediaInfo & { providerUsed: string }> {
     const validation = validateMediaUrl(url);
     if (!validation.isValid || !validation.normalizedUrl) {
-      throw new Error(validation.error || 'Invalid URL supplied.');
+      throw DownloaderError.invalidUrl(validation.error || 'Invalid URL supplied.');
     }
 
     const cleanUrl = validation.normalizedUrl;
@@ -41,22 +55,22 @@ export class DownloadService {
   }
 
   /**
-   * Processes a media download request, tracks the job lifecycle, and returns normalized result.
+   * Creates an asynchronous download job and kicks off queue processing.
    */
-  async processDownload(
+  async createDownloadJob(
     url: string,
     options: DownloadOptions = {},
     userId?: string
-  ): Promise<NormalizedDownloadResult> {
+  ): Promise<DownloadJob> {
     const validation = validateMediaUrl(url);
     if (!validation.isValid || !validation.normalizedUrl || !validation.platform) {
-      throw new Error(validation.error || 'Invalid URL supplied for download.');
+      throw DownloaderError.invalidUrl(validation.error || 'Invalid URL supplied for download.');
     }
 
     const cleanUrl = validation.normalizedUrl;
     const platform: Platform = validation.platform;
 
-    // Check cache for identical download request
+    // Check cache for identical completed download
     const cacheKey = cacheService.generateKey('download', {
       url: cleanUrl,
       type: options.type || 'video',
@@ -66,11 +80,35 @@ export class DownloadService {
 
     const cachedResult = await cacheService.get<NormalizedDownloadResult>(cacheKey);
     if (cachedResult && new Date(cachedResult.expiresAt).getTime() > Date.now()) {
-      logger.info(`Returning cached download result for ${cleanUrl}`);
-      return cachedResult;
+      logger.info(`Returning cached download job for ${cleanUrl}`);
+      const jobId = cachedResult.jobId || `job_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
+
+      const job: DownloadJob = {
+        id: jobId,
+        userId,
+        sourceUrl: cleanUrl,
+        platform,
+        provider: cachedResult.provider,
+        status: 'completed',
+        title: cachedResult.title,
+        mediaUrl: cachedResult.url,
+        downloadUrl: cachedResult.downloadUrl || cachedResult.url,
+        fileToken: cachedResult.fileToken,
+        filePath: cachedResult.filePath,
+        format: cachedResult.format,
+        quality: cachedResult.quality,
+        size: cachedResult.size,
+        mimeType: cachedResult.mimeType,
+        progress: null,
+        createdAt: now,
+        expiresAt: cachedResult.expiresAt,
+      };
+
+      await db.saveJob(job);
+      return job;
     }
 
-    // Initialize Job in Database
     const jobId = `job_${crypto.randomBytes(8).toString('hex')}`;
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + config.cache.jobExpirationSeconds * 1000).toISOString();
@@ -81,60 +119,181 @@ export class DownloadService {
       sourceUrl: cleanUrl,
       platform,
       provider: 'pending',
-      status: 'processing',
+      status: 'queued',
+      progress: null,
+      format: options.format || (options.type === 'audio' ? 'mp3' : 'mp4'),
+      quality: options.quality || '720p',
       createdAt: now,
       expiresAt,
     };
 
     await db.saveJob(job);
 
-    try {
-      const result = await providerManager.download(cleanUrl, options);
+    // Enqueue task for execution
+    this.queue.push({
+      jobId,
+      url: cleanUrl,
+      options: { ...options, jobId },
+      userId,
+    });
 
-      // Finalize Job details
-      const completedJob: Partial<DownloadJob> = {
+    // Fire queue runner in background
+    setImmediate(() => this.processNextQueueItem());
+
+    return job;
+  }
+
+  /**
+   * Processes the job queue while respecting concurrency limits.
+   */
+  private async processNextQueueItem(): Promise<void> {
+    if (this.activeDownloads >= config.maxConcurrentDownloads) {
+      return;
+    }
+
+    const task = this.queue.shift();
+    if (!task) {
+      return;
+    }
+
+    this.activeDownloads++;
+    const { jobId, url, options, userId } = task;
+
+    try {
+      await db.updateJobStatus(jobId, 'processing', {
+        provider: 'active',
+        progress: null,
+      });
+
+      logger.info(`Starting execution for download job ${jobId} (Active: ${this.activeDownloads})`);
+      const result = await providerManager.download(url, { ...options, jobId });
+
+      const completedData: Partial<DownloadJob> = {
         status: 'completed',
         provider: result.provider,
         title: result.title,
-        mediaUrl: result.url,
-        expiresAt: result.expiresAt || expiresAt,
-        metadata: result.metadata,
-      };
-
-      await db.updateJobStatus(jobId, 'completed', completedJob);
-
-      const normalized: NormalizedDownloadResult = {
-        success: true,
-        platform: result.platform || platform,
-        provider: result.provider,
-        title: result.title || `Media from ${platform}`,
         thumbnail: result.thumbnail,
-        duration: result.duration || 0,
-        format: result.format || (options.type === 'audio' ? 'mp3' : 'mp4'),
-        quality: result.quality || options.quality || '720p',
-        url: result.url,
-        expiresAt: result.expiresAt || expiresAt,
-        jobId,
+        duration: result.duration,
+        format: result.format,
+        quality: result.quality,
+        size: result.size,
+        mimeType: result.mimeType,
+        mediaUrl: result.url,
+        downloadUrl: result.downloadUrl || result.url,
+        fileToken: result.fileToken,
+        filePath: result.filePath,
+        expiresAt: result.expiresAt,
+        progress: null,
         metadata: result.metadata,
       };
 
-      // Cache normalized result for 15 minutes or until expiration
-      const ttl = Math.min(
-        config.cache.ttlSeconds,
-        Math.floor((new Date(normalized.expiresAt).getTime() - Date.now()) / 1000)
-      );
-      if (ttl > 60) {
-        await cacheService.set(cacheKey, normalized, ttl);
+      await db.updateJobStatus(jobId, 'completed', completedData);
+
+      // Cache result if applicable
+      const cacheKey = cacheService.generateKey('download', {
+        url,
+        type: options.type || 'video',
+        quality: options.quality || '720p',
+        format: options.format || 'mp4',
+      });
+      await cacheService.set(cacheKey, result, config.cache.ttlSeconds);
+
+      if (task.resolve) task.resolve(result);
+    } catch (err: unknown) {
+      const error = err as Error & { code?: string };
+      logger.error(`Download job ${jobId} failed: ${error.message}`, {
+        jobId,
+        code: error.code,
+      });
+
+      // Cleanup any temporary file if created
+      if (options.jobId) {
+        const tempFiles = await storageService.purgeExpiredFiles(0);
+        logger.debug(`Cleaned up temp files for failed job: ${tempFiles}`);
       }
 
-      return normalized;
-    } catch (err: unknown) {
-      const errorMsg = (err as Error).message || 'Download operation failed';
       await db.updateJobStatus(jobId, 'failed', {
-        error: errorMsg,
+        error: error.message || 'Download operation failed',
+        errorCode: error.code || 'PROVIDER_FAILED',
+        progress: null,
       });
-      throw err;
+
+      if (task.reject) task.reject(error);
+    } finally {
+      this.activeDownloads--;
+      // Process next in line
+      setImmediate(() => this.processNextQueueItem());
     }
+  }
+
+  /**
+   * Synchronous / awaitable download processing (useful for testing and sync clients).
+   */
+  async processDownload(
+    url: string,
+    options: DownloadOptions = {},
+    userId?: string
+  ): Promise<NormalizedDownloadResult> {
+    const job = await this.createDownloadJob(url, options, userId);
+
+    if (job.status === 'completed') {
+      return {
+        success: true,
+        platform: job.platform,
+        provider: job.provider,
+        title: job.title || 'Media',
+        duration: job.duration || 0,
+        format: job.format || 'mp4',
+        quality: job.quality || '720p',
+        url: job.downloadUrl || job.mediaUrl || '',
+        downloadUrl: job.downloadUrl || job.mediaUrl || '',
+        size: job.size,
+        mimeType: job.mimeType,
+        fileToken: job.fileToken,
+        filePath: job.filePath,
+        expiresAt: job.expiresAt,
+        jobId: job.id,
+      };
+    }
+
+    // Wait for job completion with timeout
+    const timeoutMs = (options.timeoutMs as number) || config.providers.ytdlp.timeoutMs + 10000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 800));
+      const current = await this.getJob(job.id);
+      if (!current) throw DownloaderError.jobNotFound(job.id);
+
+      if (current.status === 'completed') {
+        return {
+          success: true,
+          platform: current.platform,
+          provider: current.provider,
+          title: current.title || 'Media',
+          duration: current.duration || 0,
+          format: current.format || 'mp4',
+          quality: current.quality || '720p',
+          url: current.downloadUrl || current.mediaUrl || '',
+          downloadUrl: current.downloadUrl || current.mediaUrl || '',
+          size: current.size,
+          mimeType: current.mimeType,
+          fileToken: current.fileToken,
+          filePath: current.filePath,
+          expiresAt: current.expiresAt,
+          jobId: current.id,
+        };
+      }
+
+      if (current.status === 'failed') {
+        throw new DownloaderError(
+          current.error || 'Download failed',
+          (current.errorCode as any) || 'PROVIDER_FAILED'
+        );
+      }
+    }
+
+    throw DownloaderError.timeout('Download job timed out');
   }
 
   /**

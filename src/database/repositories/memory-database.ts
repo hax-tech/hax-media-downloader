@@ -71,7 +71,7 @@ export class MemoryDatabase implements IDatabase {
     let updatedCount = 0;
 
     for (const [id, job] of this.jobs.entries()) {
-      if ((job.status === 'pending' || job.status === 'processing') && new Date(job.createdAt).getTime() <= cutoff) {
+      if ((job.status === 'processing' || job.status === 'queued') && new Date(job.createdAt).getTime() <= cutoff) {
         job.status = 'expired';
         job.error = job.error || 'Job marked expired due to timeout/inactivity';
         this.jobs.set(id, job);

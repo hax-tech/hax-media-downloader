@@ -8,6 +8,7 @@ import {
 } from '../../types/index.ts';
 import { config } from '../../config/index.ts';
 import { detectPlatform } from '../../utils/platform-detector.ts';
+import { DownloaderError } from '../../utils/errors.ts';
 
 export class ExternalApiProvider extends BaseProvider {
   readonly name = 'external-api';
@@ -89,14 +90,17 @@ export class ExternalApiProvider extends BaseProvider {
   }
 
   async getInfo(url: string, options?: DownloadOptions): Promise<MediaInfo> {
-    const baseUrl = this.getBaseUrl();
-    if (!baseUrl) {
-      throw new Error('External API provider is not configured (EXTERNAL_API_URL missing).');
+    const platform = detectPlatform(url);
+    if (!platform) {
+      throw DownloaderError.unsupportedPlatform(`Unsupported platform for URL: ${url}`);
     }
 
-    const platform = detectPlatform(url) || 'youtube';
-    const timeoutMs = options?.timeoutMs || config.providers.external.timeoutMs;
+    const baseUrl = this.getBaseUrl();
+    if (!baseUrl) {
+      throw DownloaderError.externalApiUnavailable('External API provider is not configured (EXTERNAL_API_URL missing).');
+    }
 
+    const timeoutMs = options?.timeoutMs || config.providers.external.timeoutMs;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -117,36 +121,48 @@ export class ExternalApiProvider extends BaseProvider {
       });
 
       if (!res.ok) {
-        throw new Error(`External API info error: ${res.status}`);
+        throw DownloaderError.providerFailed(`External API info error: ${res.status}`);
       }
 
       const data = await res.json();
+      const uploader = data.author || data.creator || data.uploader || 'Creator';
       return {
         id: data.id || Buffer.from(url).toString('base64').slice(0, 16),
         title: data.title || 'Untitled Media',
+        uploader,
+        author: uploader,
         thumbnail: data.thumbnail,
         duration: data.duration || 0,
-        author: data.author || data.creator || 'Creator',
         platform,
         url,
+        webpageUrl: url,
         originalUrl: url,
         availableQualities: data.qualities || ['720p', '1080p'],
         availableFormats: data.formats || ['mp4', 'mp3'],
       };
+    } catch (err: unknown) {
+      if ((err as Error).name === 'AbortError') {
+        throw DownloaderError.timeout(`External API request timed out after ${timeoutMs}ms`);
+      }
+      if (err instanceof DownloaderError) throw err;
+      throw DownloaderError.providerFailed(`External API failed: ${(err as Error).message}`);
     } finally {
       clearTimeout(timeout);
     }
   }
 
   async download(url: string, options?: DownloadOptions): Promise<NormalizedDownloadResult> {
-    const baseUrl = this.getBaseUrl();
-    if (!baseUrl) {
-      throw new Error('External API provider is not configured (EXTERNAL_API_URL missing).');
+    const platform = detectPlatform(url);
+    if (!platform) {
+      throw DownloaderError.unsupportedPlatform(`Unsupported platform for URL: ${url}`);
     }
 
-    const platform = detectPlatform(url) || 'youtube';
-    const timeoutMs = options?.timeoutMs || config.providers.external.timeoutMs;
+    const baseUrl = this.getBaseUrl();
+    if (!baseUrl) {
+      throw DownloaderError.externalApiUnavailable('External API provider is not configured (EXTERNAL_API_URL missing).');
+    }
 
+    const timeoutMs = options?.timeoutMs || config.providers.external.timeoutMs;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -173,29 +189,37 @@ export class ExternalApiProvider extends BaseProvider {
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`External API download error (${res.status}): ${errText.slice(0, 200)}`);
+        throw DownloaderError.providerFailed(`External API download error (${res.status}): ${errText.slice(0, 200)}`);
       }
 
       const data = await res.json();
       const mediaUrl = data.url || data.downloadUrl || data.mediaUrl;
       if (!mediaUrl) {
-        throw new Error('External API response did not contain a valid media URL');
+        throw DownloaderError.providerFailed('External API response did not contain a valid media URL');
       }
 
+      const cleanTitle = data.title || `Media from ${platform}`;
       return {
         success: true,
         platform,
         provider: this.name,
-        title: data.title || `Media from ${platform}`,
+        title: cleanTitle,
         thumbnail: data.thumbnail,
         duration: data.duration || 0,
         format: options?.format || data.format || 'mp4',
         quality: options?.quality || data.quality || '720p',
         url: mediaUrl,
+        downloadUrl: mediaUrl,
         expiresAt: data.expiresAt || new Date(Date.now() + 3600 * 1000).toISOString(),
-        jobId: '',
+        jobId: (options?.jobId as string) || '',
         metadata: data.metadata || {},
       };
+    } catch (err: unknown) {
+      if ((err as Error).name === 'AbortError') {
+        throw DownloaderError.timeout(`External API request timed out after ${timeoutMs}ms`);
+      }
+      if (err instanceof DownloaderError) throw err;
+      throw DownloaderError.providerFailed(`External API failed: ${(err as Error).message}`);
     } finally {
       clearTimeout(timeout);
     }

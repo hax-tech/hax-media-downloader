@@ -38,6 +38,12 @@ router.post(
 // GET /api/job/:id
 router.get('/job/:id', (req, res, next) => downloaderController.getJobById(req, res, next));
 
+// GET /api/job/:id/file
+router.get('/job/:id/file', (req, res, next) => downloaderController.getJobFile(req, res, next));
+
+// GET /api/media/:token
+router.get('/media/:token', (req, res, next) => downloaderController.getMediaFile(req, res, next));
+
 // POST /api/search
 router.post(
   '/search',

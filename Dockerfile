@@ -20,6 +20,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
+ENV TEMP_DIR=/app/temp
+ENV YTDLP_PATH=/usr/local/bin/yt-dlp
 
 # Install runtime dependencies: ffmpeg, python3, curl for yt-dlp
 RUN apk add --no-cache \
@@ -32,6 +34,9 @@ RUN apk add --no-cache \
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
     chmod a+rx /usr/local/bin/yt-dlp
 
+# Create temp storage directory
+RUN mkdir -p /app/temp && chmod 777 /app/temp
+
 COPY package*.json ./
 RUN npm ci --only=production
 
@@ -39,7 +44,6 @@ RUN npm ci --only=production
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/index.html ./index.html
 COPY --from=builder /app/scripts ./scripts
-COPY --from=builder /app/cron ./cron
 
 EXPOSE 3000
 

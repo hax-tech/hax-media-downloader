@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { rateLimitService } from '../services/rate-limit/rate-limit.service.ts';
-import { config } from '../config/index.ts';
+import { verifyAdminKey } from './auth.middleware.ts';
 
 export function createRateLimiter(options: { isAdmin?: boolean } = {}) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -8,9 +8,12 @@ export function createRateLimiter(options: { isAdmin?: boolean } = {}) {
     const clientIp = rawIp.split(',')[0].trim();
     const userId = (req as Request & { userId?: string }).userId || clientIp;
 
-    // Check if requester has valid admin key
-    const adminHeader = req.headers['x-admin-key'] || req.headers['authorization'];
-    const isAdmin = options.isAdmin || (adminHeader && adminHeader.toString().includes(config.adminApiKey));
+    // Check if requester provided a valid admin key
+    const adminHeader = (req.headers['x-admin-key'] as string | undefined) ||
+      (req.headers['authorization']?.toString().startsWith('Bearer ') ? req.headers['authorization'].toString().slice(7) : undefined);
+
+    const hasValidAdminKey = verifyAdminKey(adminHeader);
+    const isAdmin = options.isAdmin || hasValidAdminKey;
 
     const status = await rateLimitService.checkRateLimit(userId, Boolean(isAdmin));
 

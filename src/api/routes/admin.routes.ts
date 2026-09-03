@@ -1,19 +1,23 @@
 import { Router } from 'express';
 import { adminController } from '../controllers/admin.controller.ts';
-import { adminAuthMiddleware } from '../../middleware/auth.middleware.ts';
+import { adminAuthMiddleware, cronAuthMiddleware } from '../../middleware/auth.middleware.ts';
 import { adminRateLimiter } from '../../middleware/rate-limit.middleware.ts';
 
 const router = Router();
 
-// Apply admin authentication and admin rate limiter across all /api/admin routes
-router.use(adminAuthMiddleware);
+// Apply admin rate limiter across all admin routes
 router.use(adminRateLimiter);
+
+// POST /api/admin/cache/cleanup - allows valid ADMIN_API_KEY or CRON_SECRET
+router.post('/cache/cleanup', cronAuthMiddleware, (req, res, next) =>
+  adminController.cacheCleanup(req, res, next)
+);
+
+// All subsequent admin routes require strict ADMIN_API_KEY
+router.use(adminAuthMiddleware);
 
 // POST /api/admin/providers/test
 router.post('/providers/test', (req, res, next) => adminController.testProviders(req, res, next));
-
-// POST /api/admin/cache/cleanup
-router.post('/cache/cleanup', (req, res, next) => adminController.cacheCleanup(req, res, next));
 
 // GET /api/admin/stats
 router.get('/stats', (req, res, next) => adminController.getStats(req, res, next));
