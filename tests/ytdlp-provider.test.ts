@@ -165,8 +165,8 @@ WARNING: [youtube] JavaScript runtime node is deprecated.
     console.log(`Health check: ${health.statusMessage}`);
     assert.strictEqual(health.available, true, 'Provider must report available in integration test');
 
-    // 6e. Metadata extraction against small public test URL (YouTube's first video, 19 seconds)
-    const testUrl = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+    // 6e. Metadata extraction against small public test URL
+    const testUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
     console.log(`Extracting metadata for: ${testUrl}`);
     const mediaInfo = await provider.getInfo(testUrl);
     assert.ok(mediaInfo.title, 'Media info must contain title');

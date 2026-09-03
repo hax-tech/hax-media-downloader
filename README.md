@@ -2,7 +2,8 @@
 
 > **Production-Ready Multi-Platform Media Downloader API**  
 > **Owner/Author:** Hamza  
-> **Target Consumer:** WhatsApp Bot **Tanu-xai** & external clients
+> **Target Consumer:** WhatsApp Bot **Tanu-xai** & external clients  
+> **Repository:** `https://github.com/hax-tech/hax-media-downloader`
 
 ---
 
@@ -15,133 +16,138 @@
 * **Facebook**
 * **Pinterest**
 
-It features a pluggable **Provider Adapter Architecture** with automatic priority ordering, fallback execution, SSRF protection, configurable rate limiting, concurrency management, streaming range-request file serving, metadata persistence, and automated garbage collection.
+It features a pluggable **Provider Adapter Architecture** with automatic priority ordering, fallback execution, SSRF protection, configurable rate limiting, concurrency management, streaming range-request file serving (`206 Partial Content`), metadata persistence, and automated garbage collection.
+
+---
+
+## Capabilities & Provider Status
+
+| Feature / Provider | Status | Requirements | Notes |
+|---|---|---|---|
+| **yt-dlp Provider** | **Active / Production-Ready** | `yt-dlp`, `ffmpeg`, and JS Runtime (`deno` 2.x or `node` 22+) | Default primary provider. Handles public YouTube video/audio streams, extraction, format selection, and conversions. |
+| **Cobalt Provider** | **Optional / Supported** | `COBALT_API_URL` environment variable | Optional fallback. If not configured, gracefully reports offline without errors. |
+| **External API Provider** | **Optional / Supported** | `EXTERNAL_API_URL` and `EXTERNAL_API_KEY` | Optional third-party fallback. |
+| **Supported Platforms** | **YouTube, Instagram, TikTok, Facebook, Pinterest** | Public content only | Content requiring login, age-verification, or DRM is strictly rejected by design. |
+| **Docker Support** | **Production-Ready Container** | Docker engine | Packages Node 22, Deno 2.9, FFmpeg 4.4, and verified `yt-dlp` binary with automated health checks. |
 
 ---
 
 ## Architectural Principles
 
 1. **Backend-First**: Decoupled Express API with modular, testable services.
-2. **Real Providers**: Genuine `yt-dlp` CLI binary integration with safe `execFile` parameterization, JavaScript runtime support, and format selection. Pluggable `cobalt` and `external-api` adapters.
+2. **Real Providers**: Genuine `yt-dlp` CLI binary integration with safe `execFile` parameterization, JavaScript runtime support (Deno 2.x / Node 22+), and format selection. Pluggable `cobalt` and `external-api` adapters.
 3. **Provider Fallback**: Tries providers in priority order (`yt-dlp` ➔ `cobalt` ➔ `external-api`).
 4. **Stream & Chunk Storage**: Zero memory bloat. Files are streamed to temporary storage, validated via magic bytes, served using HTTP 206 partial content ranges, and automatically cleaned up.
-5. **No Hardcoded Secrets**: All settings and keys are driven by environment variables.
+5. **No Hardcoded Secrets**: All settings and keys are driven strictly by environment variables.
 6. **Zero DRM Bypass**: Strictly designed for public, authorized content.
-
----
-
-## Project Structure
-
-```
-hax-media-downloader/
-├── src/
-│   ├── api/
-│   │   ├── controllers/
-│   │   │   ├── downloader.controller.ts   # Public API endpoints (/info, /download, /job, /media)
-│   │   │   └── admin.controller.ts        # Admin tests & stats
-│   │   └── routes/
-│   │       ├── downloader.routes.ts       # /api/health, /info, /download, /job, /media
-│   │       ├── admin.routes.ts            # /api/admin/*
-│   │       └── index.ts
-│   ├── providers/
-│   │   ├── base/
-│   │   │   ├── provider.interface.ts      # DownloaderProvider contract
-│   │   │   └── base.provider.ts           # Timeout & error handling base
-│   │   ├── ytdlp/
-│   │   │   ├── ytdlp.provider.ts          # yt-dlp CLI adapter
-│   │   │   └── ytdlp.binary.ts            # Dynamic binary resolver & runtime detection
-│   │   ├── cobalt/
-│   │   │   └── cobalt.provider.ts         # Cobalt API v7/v10 adapter
-│   │   └── external/
-│   │       └── external.provider.ts       # 3rd-party REST API adapter
-│   ├── services/
-│   │   ├── provider-manager/              # Priority & fallback orchestrator
-│   │   ├── download/                      # Job lifecycle, queue & concurrency executor
-│   │   ├── storage/                       # Safe file validation, streaming & cleanup
-│   │   ├── cache/                         # In-memory TTL cache
-│   │   ├── rate-limit/                    # Per-IP / user rate limiter
-│   │   └── cleanup/                       # Garbage collector
-│   ├── database/
-│   │   ├── models/                        # Job, Provider, Cache, RateLimit
-│   │   └── repositories/                  # Abstract DB & in-memory engine
-│   ├── middleware/                        # Auth, RateLimiter, Validation, Logger
-│   │   ├── error.middleware.ts            # Centralized DownloaderError mapper
-│   ├── utils/                             # SSRF check, Platform detection, Logger, Errors
-│   ├── config/                            # Typed environment configuration
-│   ├── types/                             # Global TypeScript declarations
-│   ├── app.ts                             # Express setup
-│   └── App.tsx                            # Admin & Developer Dashboard UI
-├── cron/
-│   └── cleanup.ts                         # Standalone cron cleanup job
-├── scripts/
-│   └── update-ytdlp.ts                    # Official yt-dlp updater
-├── tests/                                 # Complete unit & integration test suite
-├── docs/                                  # API, Providers, and Bot guides
-├── .env.example
-├── Dockerfile
-├── README.md
-├── package.json
-├── server.ts
-└── tsconfig.json
-```
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env`:
+Copy `.env.example` to `.env`. Never commit secrets or hardcode credentials into configuration or repository files.
 
-| Variable | Description | Default |
-|---|---|---|
-| `PORT` | HTTP Port | `3000` |
-| `ADMIN_API_KEY` | Secret token for `/api/admin/*` | `hax-admin-super-secret-key` |
-| `TEMP_DIR` | Directory for temporary downloaded files | `./temp` |
-| `MAX_CONCURRENT_DOWNLOADS` | Max simultaneous active downloads | `3` |
-| `MAX_FILE_SIZE_BYTES` | Maximum allowed media file size | `104857600` (100MB) |
-| `RATE_LIMIT_MAX_REQUESTS` | Standard requests per hour | `10` |
-| `RATE_LIMIT_WINDOW_MS` | Rate limit window in ms | `3600000` (1 hr) |
-| `CACHE_ENABLED` | Enable response caching | `true` |
-| `CACHE_TTL_SECONDS` | Cache expiration | `1800` (30 mins) |
-| `JOB_EXPIRATION_SECONDS` | Download job metadata TTL | `3600` (1 hr) |
-| `PROVIDER_PRIORITY` | Provider priority order | `ytdlp,cobalt,external` |
-| `YTDLP_ENABLED` | Enable yt-dlp provider | `true` |
-| `YTDLP_PATH` | Path to yt-dlp binary | `yt-dlp` |
-| `COBALT_ENABLED` | Enable Cobalt provider | `true` |
-| `COBALT_API_URL` | Cobalt instance URL | `""` |
-| `EXTERNAL_API_ENABLED` | Enable external API provider | `true` |
-| `EXTERNAL_API_URL` | Third-party API base URL | `""` |
-| `CRON_SECRET` | Secret token for external cron endpoints | `hax-cron-secret-key` |
+| Variable | Description | Requirement | Example Placeholder |
+|---|---|---|---|
+| `PORT` | HTTP Port (defaults to 3000) | Optional | `3000` |
+| `NODE_ENV` | Environment (`development`, `production`, `test`) | Optional | `production` |
+| `HOST` | Bind host address | Optional | `0.0.0.0` |
+| `ADMIN_API_KEY` | Secret token for `/api/admin/*` | **Required in Prod** | `<generate-a-long-random-secret>` |
+| `CRON_SECRET` | Secret token for `/api/admin/cache/cleanup` | **Required in Prod** | `<generate-a-long-random-secret>` |
+| `CORS_ORIGIN` | Allowed CORS origins | Optional | `https://your-domain.com` |
+| `TEMP_DIR` | Directory for temporary downloaded files | Optional | `/app/temp` |
+| `MAX_CONCURRENT_DOWNLOADS` | Max simultaneous active downloads | Optional | `3` |
+| `MAX_FILE_SIZE_MB` | Maximum allowed media file size in MB | Optional | `100` |
+| `RATE_LIMIT_MAX_REQUESTS` | Standard download requests per hour (per IP) | Optional | `10` |
+| `RATE_LIMIT_WINDOW_MS` | Rate limit window in milliseconds | Optional | `3600000` (1 hr) |
+| `CACHE_ENABLED` | Enable metadata and job caching | Optional | `true` |
+| `CACHE_TTL_SECONDS` | Metadata cache TTL | Optional | `1800` (30 mins) |
+| `JOB_EXPIRATION_SECONDS` | Download job & media token TTL | Optional | `3600` (1 hr) |
+| `CLEANUP_INTERVAL_MINUTES` | Internal garbage collector interval | Optional | `15` |
+| `PROVIDER_PRIORITY` | Provider priority order | Optional | `ytdlp,cobalt,external` |
+| `YTDLP_ENABLED` | Enable yt-dlp provider | Optional | `true` |
+| `YTDLP_PATH` | Path to yt-dlp binary | Optional | `yt-dlp` |
+| `YTDLP_JS_RUNTIME` | JS runtime for challenge solving (`auto`, `deno`, `node`) | Optional | `auto` |
+| `YTDLP_REMOTE_COMPONENTS`| EJS challenge solving component (`ejs:github`) | Optional | `ejs:github` |
+| `COBALT_ENABLED` | Enable Cobalt provider | Optional | `true` |
+| `COBALT_API_URL` | Self-hosted Cobalt API URL (no public default) | Optional | `https://cobalt.internal.yourdomain.com` |
+| `EXTERNAL_API_ENABLED` | Enable external third-party API | Optional | `false` |
+| `RUN_PROVIDER_INTEGRATION_TESTS`| Run real network integration tests | Test Only | `false` |
 
 ---
 
-## Quickstart & Installation
+## Installation & Local Development
+
+This project uses **npm** for deterministic, reproducible builds.
 
 ```bash
-# Clone and install dependencies
-git clone https://github.com/Hamza/hax-media-downloader.git
+# 1. Clone repository
+git clone https://github.com/hax-tech/hax-media-downloader.git
 cd hax-media-downloader
-npm install
 
-# Run test suite
+# 2. Install dependencies deterministically
+npm ci
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env and supply your ADMIN_API_KEY and CRON_SECRET
+
+# 4. Run test suite (Isolated unit & regression tests, zero network reliance)
 npm test
 
-# Run real yt-dlp integration tests
+# 5. Optional: Run live integration tests (requires network & yt-dlp)
 RUN_PROVIDER_INTEGRATION_TESTS=true npm test
 
-# Start development server (API + Admin Dashboard)
+# 6. Start development server
 npm run dev
-
-# Build for production
-npm run build
-npm start
 ```
 
 ---
 
-## API Endpoints
+## Production Docker Deployment
 
-### 1. `POST /api/download`
-Creates an asynchronous queued download job (or synchronous if `?sync=true`).
+The provided multi-stage `Dockerfile` is built on `node:22-bookworm-slim`, containing system `ffmpeg`, Python 3, official `deno` (v2.x) for YouTube JavaScript challenge solving, and the official `yt-dlp` binary. The application runs as a non-privileged `node` user with an automated container healthcheck.
+
+```bash
+# 1. Build production Docker image
+docker build -t hax-media-downloader:latest .
+
+# 2. Run container
+docker run -d \
+  --name hax-downloader \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -e NODE_ENV=production \
+  -e ADMIN_API_KEY="<generate-a-long-random-secret>" \
+  -e CRON_SECRET="<generate-a-long-random-secret>" \
+  -e CORS_ORIGIN="https://your-domain.com" \
+  -v hax-temp-data:/app/temp \
+  hax-media-downloader:latest
+
+# 3. Check container health status
+docker inspect --format='{{json .State.Health.Status}}' hax-downloader
+```
+
+---
+
+## API Reference
+
+### 1. `GET /api/health`
+System healthcheck returning uptime, memory usage, concurrency, and service health.
+
+### 2. `GET /api/providers`
+Lists all registered providers, their configured priority, supported platforms, and real-time connectivity status.
+
+### 3. `POST /api/info`
+Extracts rich media metadata (title, uploader, duration, thumbnail, available streams) without initiating a download.
+```json
+{
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+```
+
+### 4. `POST /api/download`
+Submits an asynchronous download request. Returns HTTP 202 with `jobId`.
 ```json
 {
   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -151,105 +157,79 @@ Creates an asynchronous queued download job (or synchronous if `?sync=true`).
 }
 ```
 
-**Job Creation Response (HTTP 202):**
+**Asynchronous Response (HTTP 202 Accepted):**
 ```json
 {
   "success": true,
-  "data": {
-    "jobId": "job_e86bbeb3cbc52141",
-    "status": "queued"
-  },
-  "jobId": "job_e86bbeb3cbc52141",
+  "jobId": "job_b8c05e7245b9f6d0",
   "status": "queued"
 }
 ```
 
-### 2. `GET /api/job/:id`
-Poll job status.
+*(Note: pass query parameter `?sync=true` if synchronous completion is desired for testing).*
+
+### 5. `GET /api/job/:id`
+Polls job state (`queued` ➔ `processing` ➔ `completed` or `failed`).
 ```json
 {
   "success": true,
   "data": {
-    "id": "job_e86bbeb3cbc52141",
+    "id": "job_b8c05e7245b9f6d0",
     "status": "completed",
     "title": "Rick Astley - Never Gonna Give You Up",
     "mimeType": "video/mp4",
-    "size": 15482910,
+    "size": 11953728,
     "downloadUrl": "/api/media/tok_e827e12a0da2dea23efb06147c7bbfb2",
     "format": "mp4",
     "quality": "720p",
     "duration": 213,
-    "createdAt": "2026-09-03T22:59:57.117Z",
-    "expiresAt": "2026-09-04T00:00:06.269Z"
+    "expiresAt": "2026-09-04T00:23:45.000Z"
   }
 }
 ```
 
-### 3. `GET /api/media/:token`
-Streams the completed media file with HTTP Range support (`206 Partial Content`), safe headers, and content disposition.
+### 6. `GET /api/media/:fileToken`
+Secure, streaming file delivery endpoint. Validates:
+* Token existence and ownership
+* Job expiration (expired tokens return HTTP 410 Gone)
+* File existence on disk
+* HTTP 206 Partial Content (range requests for smooth seeking and streaming)
+* MIME type headers
 
-### 4. `POST /api/info`
-Extracts rich media metadata without downloading:
+### 7. `POST /api/search`
+Searches media platforms by query:
 ```json
 {
-  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-}
-```
-
-### 5. `POST /api/search`
-Searches YouTube/media platforms:
-```json
-{
-  "query": "Rick Astley",
+  "query": "lofi hip hop study beats",
   "platform": "youtube"
 }
 ```
 
-### 6. `GET /api/providers`
-Health, priority, and availability of all registered providers.
+### 8. `POST /api/admin/providers/test`
+*Requires `X-Admin-Key` or `Authorization: Bearer <ADMIN_API_KEY>`*. Tests connectivity and latency of all providers.
 
-### 7. `GET /api/health`
-System uptime, memory usage, and concurrency statistics.
+### 9. `POST /api/admin/cache/cleanup`
+*Requires `X-Cron-Secret` or `X-Admin-Key`*. Purges expired jobs, deletes expired temporary media files, and clears stale cache entries.
+
+---
+
+## Rate Limiting & Concurrency
+
+* **Standard Rate Limit**: 10 download requests per hour per IP (configurable via `RATE_LIMIT_MAX_REQUESTS`).
+* **Storage & Concurrency**: Download execution is bounded by an asynchronous FIFO queue (`MAX_CONCURRENT_DOWNLOADS=3`).
+* **Distributed Caveat**: The built-in rate limiter is memory-bounded and process-local. For distributed horizontal scaling across multiple container replicas, configure a shared Redis or external gateway.
 
 ---
 
 ## WhatsApp Bot "Tanu-xai" Integration
 
-```typescript
-// Tanu-xai WhatsApp Bot Handler Example
-async function handleMediaDownload(sock, chatId, userUrl) {
-  // 1. Submit download job
-  const res = await fetch('http://localhost:3000/api/download', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: userUrl, type: 'video', quality: '720p' }),
-  });
-  const { data } = await res.json();
-
-  // 2. Poll job status
-  let job;
-  while (true) {
-    await new Promise((r) => setTimeout(r, 1500));
-    const jobRes = await fetch(`http://localhost:3000/api/job/${data.jobId}`);
-    const jobJson = await jobRes.json();
-    job = jobJson.data;
-    if (job.status === 'completed' || job.status === 'failed') break;
-  }
-
-  // 3. Dispatch to WhatsApp user
-  if (job.status === 'completed') {
-    const fullMediaUrl = `http://localhost:3000${job.downloadUrl}`;
-    await sock.sendMessage(chatId, {
-      video: { url: fullMediaUrl },
-      caption: `🎬 ${job.title}`,
-    });
-  } else {
-    await sock.sendMessage(chatId, { text: `❌ Download failed: ${job.error}` });
-  }
-}
-```
+See [`docs/TANU-XAI-INTEGRATION.md`](docs/TANU-XAI-INTEGRATION.md) for complete TypeScript integration code and client lifecycle contract.
 
 ---
 
-## License & Security
-Authored by **Hamza**. Designed strictly for authorized, public content.
+## License & Legal Disclaimer
+
+Licensed under the [MIT License](LICENSE).  
+Authored by **Hamza**.
+
+This software is strictly intended for downloading and processing authorized, publicly available media for personal backup and educational purposes. End users are solely responsible for adhering to platform terms of service and copyright laws. This software does not bypass DRM or access controls.

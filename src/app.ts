@@ -32,5 +32,11 @@ export function createApp() {
   // Mount API endpoints under /api
   app.use('/api', apiRouter);
 
+  // 404 handler for unknown routes
+  app.use(notFoundHandler);
+
+  // Centralized JSON error handler
+  app.use(errorHandler);
+
   return app;
 }

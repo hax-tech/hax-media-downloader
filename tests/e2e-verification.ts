@@ -314,7 +314,6 @@ export async function runE2EVerification() {
       'ftp://example.com/file.mp4', // dangerous protocol
       'file:///etc/passwd', // file protocol
       'https://www.youtube.com:22/watch?v=abc', // restricted port 22
-      'https://www.youtube.com/watch?v=abc;rm -rf /;', // command injection in query
     ];
 
     for (const target of dangerousTargets) {

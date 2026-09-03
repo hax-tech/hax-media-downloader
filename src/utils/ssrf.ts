@@ -98,6 +98,11 @@ export function isSafeUrl(rawUrl: string): { safe: boolean; reason?: string } {
     return { safe: false, reason: 'Invalid URL syntax' };
   }
 
+  // Disallow control characters, null bytes, backticks, pipe, or shell injection sequences
+  if (/[\0\r\n`$<>|]/.test(rawUrl) || /;.*(\s|rm|bash|sh|exec)/i.test(rawUrl) || /;$/.test(rawUrl.trim())) {
+    return { safe: false, reason: 'URL contains illegal or dangerous characters' };
+  }
+
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { safe: false, reason: `Unsupported protocol: ${parsed.protocol}. Only HTTP and HTTPS are permitted.` };
   }

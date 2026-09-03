@@ -34,6 +34,9 @@ export class DownloadService {
   async getMediaInfo(url: string, options?: DownloadOptions): Promise<MediaInfo & { providerUsed: string }> {
     const validation = validateMediaUrl(url);
     if (!validation.isValid || !validation.normalizedUrl) {
+      if (validation.error?.toLowerCase().includes('unsupported platform')) {
+        throw DownloaderError.unsupportedPlatform(validation.error);
+      }
       throw DownloaderError.invalidUrl(validation.error || 'Invalid URL supplied.');
     }
 
@@ -64,6 +67,9 @@ export class DownloadService {
   ): Promise<DownloadJob> {
     const validation = validateMediaUrl(url);
     if (!validation.isValid || !validation.normalizedUrl || !validation.platform) {
+      if (validation.error?.toLowerCase().includes('unsupported platform')) {
+        throw DownloaderError.unsupportedPlatform(validation.error);
+      }
       throw DownloaderError.invalidUrl(validation.error || 'Invalid URL supplied for download.');
     }
 
