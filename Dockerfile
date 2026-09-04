@@ -56,7 +56,7 @@ RUN mkdir -p /app/temp && \
 
 # Install production npm dependencies
 COPY --chown=node:node package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --only=production
 
 # Copy compiled build artifacts and necessary operational scripts
 COPY --from=builder --chown=node:node /app/dist ./dist
