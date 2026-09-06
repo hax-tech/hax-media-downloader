@@ -12,7 +12,7 @@ import { DownloaderError } from '../../utils/errors.ts';
 
 export class ExternalApiProvider extends BaseProvider {
   readonly name = 'external-api';
-  readonly supportedPlatforms: Platform[] = ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest'];
+  readonly supportedPlatforms: Platform[] = ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter'];
 
   private getBaseUrl(): string | null {
     const url = config.providers.external.apiUrl;
