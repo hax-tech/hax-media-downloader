@@ -24,6 +24,7 @@ export const InteractiveTester: React.FC<{ onJobCreated?: () => void }> = ({ onJ
     { label: 'TikTok Video', url: 'https://www.tiktok.com/@creator/video/7182938472918237182' },
     { label: 'Facebook Watch', url: 'https://fb.watch/kL9832_abc/' },
     { label: 'Pinterest Pin', url: 'https://pin.it/7a8b9c0' },
+    { label: 'X Post', url: 'https://x.com/example/status/1234567890' },
   ];
 
   // Poll active job status until finished
@@ -163,7 +164,7 @@ export const InteractiveTester: React.FC<{ onJobCreated?: () => void }> = ({ onJ
                 Platform: {detectedPlatform}
               </span>
             ) : (
-              <span className="text-[11px] text-zinc-400">Supported: YouTube, Instagram, TikTok, Facebook, Pinterest</span>
+              <span className="text-[11px] text-zinc-400">Supported: YouTube, Instagram, TikTok, Facebook, Pinterest, X/Twitter</span>
             )}
           </div>
           <div className="flex gap-2">
