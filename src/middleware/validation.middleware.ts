@@ -35,5 +35,5 @@ export const DownloadRequestSchema = z.object({
 
 export const SearchRequestSchema = z.object({
   query: z.string().trim().min(1, 'Search query cannot be empty'),
-  platform: z.enum(['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest']).optional(),
+  platform: z.enum(['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter']).optional(),
 });
