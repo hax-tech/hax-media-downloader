@@ -12,7 +12,7 @@ import { DownloaderError } from '../../utils/errors.ts';
 
 export class CobaltProvider extends BaseProvider {
   readonly name = 'cobalt';
-  readonly supportedPlatforms: Platform[] = ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest'];
+  readonly supportedPlatforms: Platform[] = ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter'];
 
   private getBaseUrl(): string | null {
     const url = config.providers.cobalt.apiUrl;
@@ -47,7 +47,7 @@ export class CobaltProvider extends BaseProvider {
         Accept: 'application/json',
       };
       if (config.providers.cobalt.apiKey) {
-        headers['Authorization'] = `Bearer ${config.providers.cobalt.apiKey}`;
+        headers['Authorization'] = `Api-Key ${config.providers.cobalt.apiKey}`;
       }
 
       // Check serverInfo or root
@@ -157,6 +157,8 @@ export class CobaltProvider extends BaseProvider {
       videoQuality: vQuality,
       downloadMode: isAudio ? 'audio' : 'auto',
       audioFormat: options?.format || 'mp3',
+      filenameStyle: 'pretty',
+      youtubeVideoCodec: 'h264',
     };
 
     const headers: Record<string, string> = {
@@ -164,7 +166,7 @@ export class CobaltProvider extends BaseProvider {
       Accept: 'application/json',
     };
     if (config.providers.cobalt.apiKey) {
-      headers['Authorization'] = `Bearer ${config.providers.cobalt.apiKey}`;
+      headers['Authorization'] = `Api-Key ${config.providers.cobalt.apiKey}`;
     }
 
     const controller = new AbortController();
@@ -204,7 +206,7 @@ export class CobaltProvider extends BaseProvider {
       }
 
       if (!directUrl) {
-        const errMsg = data.error?.code || data.text || data.message || 'Cobalt returned no media stream URL';
+        const errMsg = data.error?.code || data.code || data.text || data.message || 'Cobalt returned no media stream URL';
         throw DownloaderError.providerFailed(`Cobalt error: ${errMsg}`);
       }
 
