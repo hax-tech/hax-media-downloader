@@ -105,7 +105,7 @@ export function parseYtDlpJson(stdout: string): Record<string, unknown> {
 
 export class YtDlpProvider extends BaseProvider {
   readonly name = 'yt-dlp';
-  readonly supportedPlatforms: Platform[] = ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest'];
+  readonly supportedPlatforms: Platform[] = ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter'];
 
   async healthCheck(): Promise<ProviderHealth> {
     if (!config.providers.ytdlp.enabled) {
