@@ -42,6 +42,12 @@ const PLATFORM_RULES: PlatformRule[] = [
       /^(https?:\/\/)?pin\.it\/[a-zA-Z0-9_-]+/i,
     ],
   },
+  {
+    platform: 'twitter',
+    patterns: [
+      /^(https?:\/\/)?(www\.)?(twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/\d+/i,
+    ],
+  },
 ];
 
 export function detectPlatform(url: string): Platform | null {
@@ -58,5 +64,5 @@ export function detectPlatform(url: string): Platform | null {
 }
 
 export function isPlatformSupported(platform: string): platform is Platform {
-  return ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest'].includes(platform);
+  return ['youtube', 'instagram', 'tiktok', 'facebook', 'pinterest', 'twitter'].includes(platform);
 }
