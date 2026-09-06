@@ -27,7 +27,7 @@ export function validateMediaUrl(rawUrl: string): ValidationResult {
   if (!platform) {
     return {
       isValid: false,
-      error: 'Unsupported platform. Supported platforms: YouTube, Instagram, TikTok, Facebook, Pinterest.',
+      error: 'Unsupported platform. Supported platforms: YouTube, Instagram, TikTok, Facebook, Pinterest, X/Twitter.',
     };
   }
 
