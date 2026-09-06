@@ -71,7 +71,7 @@ export class ProviderManager {
     const platform = detectPlatform(url);
     if (!platform) {
       throw DownloaderError.unsupportedPlatform(
-        'Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest.'
+        'Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest, X/Twitter.'
       );
     }
 
@@ -125,7 +125,7 @@ export class ProviderManager {
     const platform = detectPlatform(url);
     if (!platform) {
       throw DownloaderError.unsupportedPlatform(
-        'Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest.'
+        'Unsupported URL. Valid platforms are: YouTube, Instagram, TikTok, Facebook, Pinterest, X/Twitter.'
       );
     }
 
